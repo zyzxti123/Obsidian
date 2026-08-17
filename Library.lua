@@ -1258,6 +1258,7 @@ local function FillInstance(Table: { [string]: any }, Instance: GuiObject)
 end
 
 local function New(ClassName: string, Properties: { [string]: any }): any
+    setthreadidentity(8)
     local Instance = Instance.new(ClassName)
 
     if Templates[ClassName] then
@@ -1449,6 +1450,7 @@ function Library:GetKeyString(KeyCode: Enum.KeyCode)
 end
 
 function Library:GetTextBounds(Text: string, Font: Font, Size: number, Width: number?): (number, number)
+    setthreadidentity(8)
     local Params = Instance.new("GetTextBoundsParams")
     Params.Text = Text
     Params.RichText = true

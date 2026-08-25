@@ -178,6 +178,12 @@ local Library = {
     ScreenGui = nil,
     Window = nil,
     WindowContainer = nil,
+    KeyStatusComponents = {},
+    AnonymousMode = false,
+    AnonymousModeToggle = nil,
+    Flags = {
+        AnonymousMode = false,
+    },
 
     --// Search \\--
     SearchText = "",
@@ -365,6 +371,8 @@ local Templates = {
     Window = {
         Title = "No Title",
         Footer = "No Footer",
+        KeyStatus = false,
+        AnonymousMode = false,
 
         Position = UDim2.fromOffset(6, 6),
         Size = UDim2.fromOffset(720, 600),
@@ -418,6 +426,26 @@ local Templates = {
         TabTransitionTime = 0.22,
         TabSwipeOffset = 26,
         TabSwipeFrom = "bottom"
+    },
+    KeyStatus = {
+        Enabled = true,
+        Provider = "Luarmor",
+        Status = nil,
+        Developer = false,
+        Username = LocalPlayer.Name,
+        DisplayName = LocalPlayer.DisplayName,
+        UserId = LocalPlayer.UserId,
+        Anonymous = false,
+        RemainingTime = nil,
+        Lifetime = nil,
+        GetRemainingTime = nil,
+        LifetimeText = nil,
+        StatusColors = {
+            Freemium = Color3.fromRGB(145, 145, 155),
+            Premium = Color3.fromRGB(125, 85, 255),
+            Developer = Color3.fromRGB(67, 196, 128),
+            Expired = Color3.fromRGB(235, 75, 75),
+        },
     },
     Dialog = {
         Title = "Dialog",
@@ -1179,6 +1207,50 @@ function Library:GiveSignal(Connection: RBXScriptConnection | RBXScriptSignal)
     end
 
     return Connection
+end
+
+function Library:GetLuarmorKeyStatus(Overrides: { [string]: any }?): { [string]: any }
+    setthreadidentity(8)
+    local Info = table.clone(Overrides or {})
+    local IsPremium = LRM_IsUserPremium
+    local SecondsLeft = LRM_SecondsLeft
+
+    Info.Provider = "Luarmor"
+    Info.Status = Info.Status or (if Info.Developer == true then "Developer" elseif IsPremium == true then "Premium" else "Freemium")
+
+    if Info.RemainingTime == nil and typeof(SecondsLeft) == "number" then
+        Info.RemainingTime = SecondsLeft
+    end
+
+    if Info.LifetimeText == nil and Info.RemainingTime == math.huge then
+        Info.LifetimeText = "Lifetime"
+    end
+
+    return Info
+end
+
+function Library:GetAnonymousMode(): boolean
+    setthreadidentity(8)
+    return Library.AnonymousMode == true
+end
+
+function Library:SetAnonymousMode(State: boolean)
+    setthreadidentity(8)
+    assert(typeof(State) == "boolean", "Anonymous mode must be a boolean")
+
+    Library.AnonymousMode = State
+    Library.Flags.AnonymousMode = State
+
+    for _, Component in Library.KeyStatusComponents do
+        if not Component.Destroyed and typeof(Component.ApplyAnonymousMode) == "function" then
+            Component:ApplyAnonymousMode(State)
+        end
+    end
+
+    local Toggle = Library.AnonymousModeToggle
+    if Toggle and not Toggle.Destroyed and Toggle.Value ~= State then
+        Toggle:SetValue(State)
+    end
 end
 
 function IsValidCustomIcon(Icon: string)
@@ -9085,6 +9157,8 @@ function Library:CreateWindow(WindowInfo)
     Library.Scheme.Font = WindowInfo.Font
     Library.ToggleKeybind = WindowInfo.ToggleKeybind
     Library.GlobalSearch = WindowInfo.GlobalSearch
+    Library.AnonymousMode = WindowInfo.AnonymousMode == true
+    Library.Flags.AnonymousMode = Library.AnonymousMode
     
     Library.Animations = WindowInfo.Animations
     Library.TabTransitionInfo = TweenInfo.new(
@@ -9113,6 +9187,8 @@ function Library:CreateWindow(WindowInfo)
     local BottomBackground
     local FooterLabel
     local TopBar
+    local KeyStatusComponent
+    local UpdateKeyStatusLayout = function() end
 
     local InitialLeftWidth = math.ceil(WindowInfo.Size.X.Offset * 0.3)
     local IsCompact = WindowInfo.SidebarCompacted
@@ -9573,6 +9649,423 @@ function Library:CreateWindow(WindowInfo)
         WindowInfo.Footer = Footer
     end
 
+    function Window:AddKeyStatus(Info: { [string]: any }?): { [string]: any }?
+        setthreadidentity(8)
+        assert(Info == nil or typeof(Info) == "table", "Expected table for key status got: " .. typeof(Info))
+
+        if KeyStatusComponent and not KeyStatusComponent.Destroyed then
+            KeyStatusComponent:SetData(Info or {})
+            if Info and Info.SettingsGroupbox then
+                Window:AddKeyStatusSettings(Info.SettingsGroupbox, Info.SettingsToggleIndex)
+            end
+            return KeyStatusComponent
+        end
+
+        local ResolvedInfo = Info or {}
+        if ResolvedInfo.Provider == nil or string.lower(tostring(ResolvedInfo.Provider)) == "luarmor" then
+            ResolvedInfo = Library:GetLuarmorKeyStatus(ResolvedInfo)
+        end
+
+        local Data = Library:Validate(ResolvedInfo, Templates.KeyStatus)
+        if not Data.Enabled then
+            return nil
+        end
+
+        local Height = 112
+        local RemainingTimeSetAt = os.clock()
+        local BaseRemainingTime = Data.RemainingTime
+        local LastRemainingSecond = -1
+        local RefreshConnection: RBXScriptConnection?
+
+        local Card = New("Frame", {
+            AnchorPoint = Vector2.new(0, 1),
+            BackgroundColor3 = "MainColor",
+            Position = UDim2.new(0, 8, 1, -28),
+            Size = UDim2.new(0, math.max(Tabs.Size.X.Offset - 16, 0), 0, Height),
+            Parent = MainFrame,
+        })
+        table.insert(Library.Corners, New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = Card,
+        }))
+        Library:AddOutline(Card)
+
+        local Avatar = New("ImageLabel", {
+            BackgroundColor3 = "BackgroundColor",
+            Image = "",
+            Position = UDim2.fromOffset(10, 10),
+            Size = UDim2.fromOffset(42, 42),
+            Parent = Card,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0),
+            Parent = Avatar,
+        })
+        local AvatarStroke = New("UIStroke", {
+            Color = Data.StatusColors.Freemium,
+            Thickness = 1,
+            Parent = Avatar,
+        })
+
+        local DisplayNameLabel = New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(60, 8),
+            Size = UDim2.new(1, -70, 0, 19),
+            Text = "",
+            TextSize = 14,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = Card,
+        })
+        local UsernameLabel = New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(60, 27),
+            Size = UDim2.new(1, -70, 0, 16),
+            Text = "",
+            TextSize = 12,
+            TextTransparency = 0.5,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = Card,
+        })
+        local StatusDot = New("Frame", {
+            BackgroundColor3 = Data.StatusColors.Freemium,
+            Position = UDim2.fromOffset(60, 46),
+            Size = UDim2.fromOffset(6, 6),
+            Parent = Card,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0),
+            Parent = StatusDot,
+        })
+        local StatusLabel = New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(71, 41),
+            Size = UDim2.new(1, -81, 0, 16),
+            Text = "",
+            TextSize = 12,
+            TextTransparency = 0.25,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = Card,
+        })
+
+        New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(10, 67),
+            Size = UDim2.new(0.5, -10, 0, 16),
+            Text = "Key lifetime",
+            TextSize = 12,
+            TextTransparency = 0.5,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = Card,
+        })
+        local RemainingLabel = New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0.5, 0, 0, 67),
+            Size = UDim2.new(0.5, -10, 0, 16),
+            Text = "",
+            TextSize = 12,
+            TextTransparency = 0.25,
+            TextXAlignment = Enum.TextXAlignment.Right,
+            Parent = Card,
+        })
+
+        local ProgressBackground = New("Frame", {
+            BackgroundColor3 = "BackgroundColor",
+            Position = UDim2.fromOffset(10, 91),
+            Size = UDim2.new(1, -20, 0, 7),
+            Parent = Card,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0),
+            Parent = ProgressBackground,
+        })
+        local ProgressFill = New("Frame", {
+            BackgroundColor3 = Data.StatusColors.Freemium,
+            Size = UDim2.fromScale(1, 1),
+            Parent = ProgressBackground,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0),
+            Parent = ProgressFill,
+        })
+
+        local Component = {
+            Type = "KeyStatus",
+            Data = Data,
+            Container = Card,
+            Destroyed = false,
+            Visible = true,
+        }
+
+        local function FormatRemainingTime(Seconds: number): string
+            if Seconds == math.huge then
+                return Data.LifetimeText or "Lifetime"
+            end
+
+            Seconds = math.max(0, math.floor(Seconds))
+            local Days = Seconds // 86400
+            local Hours = (Seconds % 86400) // 3600
+            local Minutes = (Seconds % 3600) // 60
+            local RemainingSeconds = Seconds % 60
+
+            if Days > 0 then
+                return string.format("%dd %02dh", Days, Hours)
+            elseif Hours > 0 then
+                return string.format("%dh %02dm", Hours, Minutes)
+            elseif Minutes > 0 then
+                return string.format("%dm %02ds", Minutes, RemainingSeconds)
+            end
+
+            return string.format("%ds", RemainingSeconds)
+        end
+
+        function Component:GetRemainingTime(): number?
+            setthreadidentity(8)
+            if typeof(Data.GetRemainingTime) == "function" then
+                local Success, RemainingTime = pcall(Data.GetRemainingTime, Data)
+                if Success and typeof(RemainingTime) == "number" then
+                    return RemainingTime
+                elseif not Success then
+                    warn(`[Obsidian] Key status time provider failed: {RemainingTime}`)
+                end
+            end
+
+            if typeof(BaseRemainingTime) == "number" then
+                if BaseRemainingTime == math.huge then
+                    return math.huge
+                end
+
+                return math.max(0, BaseRemainingTime - (os.clock() - RemainingTimeSetAt))
+            end
+
+            return nil
+        end
+
+        function Component:ApplyAnonymousMode(State: boolean)
+            setthreadidentity(8)
+            assert(typeof(State) == "boolean", "Anonymous mode must be a boolean")
+
+            Data.Anonymous = State
+            Avatar.Image = string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150", State and 0 or Data.UserId)
+            DisplayNameLabel.Text = State and "********" or tostring(Data.DisplayName)
+            UsernameLabel.Text = State and "@********" or `@{Data.Username}`
+        end
+
+        function Component:Refresh(Force: boolean?)
+            setthreadidentity(8)
+            if Component.Destroyed then
+                return
+            end
+
+            local RemainingTime = Component:GetRemainingTime()
+            local RemainingSecond = if typeof(RemainingTime) == "number" then math.floor(RemainingTime) else -1
+            if not Force and RemainingSecond == LastRemainingSecond then
+                return
+            end
+            LastRemainingSecond = RemainingSecond
+
+            local Status = tostring(Data.Status)
+            local Expired = typeof(RemainingTime) == "number" and RemainingTime ~= math.huge and RemainingTime <= 0
+            local StatusColor = if Expired then Data.StatusColors.Expired else Data.StatusColors[Status] or Library.Scheme.AccentColor
+            local Lifetime = Data.Lifetime
+            local Progress = 1
+
+            if typeof(RemainingTime) == "number" then
+                if RemainingTime == math.huge then
+                    RemainingLabel.Text = Data.LifetimeText or "Lifetime"
+                elseif Expired then
+                    RemainingLabel.Text = "Expired"
+                    Progress = 0
+                else
+                    RemainingLabel.Text = FormatRemainingTime(RemainingTime)
+                    if typeof(Lifetime) == "number" and Lifetime > 0 and Lifetime ~= math.huge then
+                        Progress = math.clamp(RemainingTime / Lifetime, 0, 1)
+                    end
+                end
+            else
+                RemainingLabel.Text = Data.LifetimeText or (if Status == "Developer" then "Unlimited" else "No active key")
+            end
+
+            StatusLabel.Text = Expired and "Expired" or Status
+            StatusLabel.TextColor3 = StatusColor
+            StatusDot.BackgroundColor3 = StatusColor
+            AvatarStroke.Color = StatusColor
+            ProgressFill.BackgroundColor3 = StatusColor
+            ProgressFill.Size = UDim2.fromScale(Progress, 1)
+            Component:ApplyAnonymousMode(Library:GetAnonymousMode())
+        end
+
+        function Component:SetStatus(Status: string)
+            setthreadidentity(8)
+            assert(typeof(Status) == "string", "Key status must be a string")
+            Data.Status = Status
+            Component:Refresh(true)
+        end
+
+        function Component:SetRemainingTime(RemainingTime: number?, _Lifetime: number?)
+            setthreadidentity(8)
+            assert(RemainingTime == nil or typeof(RemainingTime) == "number", "Remaining time must be a number or nil")
+            local Lifetime = _Lifetime
+            assert(Lifetime == nil or typeof(Lifetime) == "number", "Lifetime must be a number or nil")
+
+            BaseRemainingTime = RemainingTime
+            Data.RemainingTime = RemainingTime
+            Data.Lifetime = Lifetime or RemainingTime
+            RemainingTimeSetAt = os.clock()
+            Component:Refresh(true)
+        end
+
+        function Component:SetData(NewInfo: { [string]: any })
+            setthreadidentity(8)
+            assert(typeof(NewInfo) == "table", "Expected table for key status data")
+
+            local UpdatedInfo = NewInfo
+            if UpdatedInfo.Provider == nil or string.lower(tostring(UpdatedInfo.Provider)) == "luarmor" then
+                UpdatedInfo = Library:GetLuarmorKeyStatus(UpdatedInfo)
+            end
+
+            for Key, Value in UpdatedInfo do
+                if Key == "StatusColors" and typeof(Value) == "table" then
+                    for Status, Color in Value do
+                        Data.StatusColors[Status] = Color
+                    end
+                else
+                    Data[Key] = Value
+                end
+            end
+
+            BaseRemainingTime = Data.RemainingTime
+            Data.Lifetime = Data.Lifetime or BaseRemainingTime
+            RemainingTimeSetAt = os.clock()
+            Component.Visible = Data.Enabled ~= false
+            Component:Refresh(true)
+            UpdateKeyStatusLayout()
+        end
+
+        function Component:SetVisible(Visible: boolean)
+            setthreadidentity(8)
+            assert(typeof(Visible) == "boolean", "Key status visibility must be a boolean")
+            Component.Visible = Visible
+            UpdateKeyStatusLayout()
+        end
+
+        function Component:SetAnonymous(State: boolean)
+            setthreadidentity(8)
+            Library:SetAnonymousMode(State)
+        end
+
+        function Component:Destroy()
+            setthreadidentity(8)
+            if Component.Destroyed then
+                return
+            end
+
+            Component.Destroyed = true
+            Component.Visible = false
+            UpdateKeyStatusLayout()
+            if RefreshConnection and RefreshConnection.Connected then
+                RefreshConnection:Disconnect()
+            end
+            local SignalIndex = table.find(Library.Signals, RefreshConnection)
+            if SignalIndex then
+                table.remove(Library.Signals, SignalIndex)
+            end
+            RefreshConnection = nil
+            local ComponentIndex = table.find(Library.KeyStatusComponents, Component)
+            if ComponentIndex then
+                table.remove(Library.KeyStatusComponents, ComponentIndex)
+            end
+            Card:Destroy()
+            KeyStatusComponent = nil
+            UpdateKeyStatusLayout = function() end
+        end
+
+        KeyStatusComponent = Component
+        table.insert(Library.KeyStatusComponents, Component)
+
+        UpdateKeyStatusLayout = function()
+            setthreadidentity(8)
+            local Visible = not Component.Destroyed and Component.Visible and not IsCompact
+            Card.Visible = Visible
+            Card.Size = UDim2.new(0, math.max(Tabs.Size.X.Offset - 16, 0), 0, Height)
+            Tabs.Size = UDim2.new(0, Tabs.Size.X.Offset, 1, Visible and -(70 + Height + 15) or -70)
+        end
+
+        if Data.Lifetime == nil and typeof(BaseRemainingTime) == "number" then
+            Data.Lifetime = BaseRemainingTime
+        end
+        if Data.Anonymous then
+            Library:SetAnonymousMode(true)
+        end
+
+        Component:Refresh(true)
+        UpdateKeyStatusLayout()
+
+        local RefreshElapsed = 0
+        RefreshConnection = Library:GiveSignal(RunService.Heartbeat:Connect(function(DeltaTime: number)
+            setthreadidentity(8)
+            if Component.Destroyed then
+                return
+            end
+
+            RefreshElapsed += DeltaTime
+            if RefreshElapsed < 0.25 then
+                return
+            end
+
+            RefreshElapsed = 0
+            Component:Refresh()
+        end)) :: RBXScriptConnection
+
+        if Data.SettingsGroupbox then
+            Window:AddKeyStatusSettings(Data.SettingsGroupbox, Data.SettingsToggleIndex)
+        end
+
+        return Component
+    end
+
+    function Window:SetKeyStatus(Info: { [string]: any }): { [string]: any }?
+        setthreadidentity(8)
+        return Window:AddKeyStatus(Info)
+    end
+
+    function Window:GetKeyStatus(): { [string]: any }?
+        setthreadidentity(8)
+        return KeyStatusComponent
+    end
+
+    function Window:SetAnonymousMode(State: boolean)
+        setthreadidentity(8)
+        Library:SetAnonymousMode(State)
+    end
+
+    function Window:AddKeyStatusSettings(Groupbox: { [string]: any }, _ToggleIndex: string?): { [string]: any }
+        setthreadidentity(8)
+        assert(typeof(Groupbox) == "table" and typeof(Groupbox.AddToggle) == "function", "Expected an Obsidian groupbox")
+        local ToggleIndex = _ToggleIndex or "ObsidianAnonymousMode"
+        assert(typeof(ToggleIndex) == "string", "Expected string for anonymous mode toggle index")
+
+        local ExistingToggle = Toggles[ToggleIndex]
+        if ExistingToggle then
+            Library.AnonymousModeToggle = ExistingToggle
+            return ExistingToggle
+        end
+
+        local Toggle = Groupbox:AddToggle(ToggleIndex, {
+            Text = "Anonymous Mode",
+            Default = Library:GetAnonymousMode(),
+            Tooltip = "Hides your avatar, username and display name in the key status card.",
+            Callback = function(Value: boolean)
+                setthreadidentity(8)
+                Library:SetAnonymousMode(Value)
+            end,
+        })
+        Library.AnonymousModeToggle = Toggle
+        return Toggle
+    end
+
     function Window:SetCornerRadius(Radius: number)
         setthreadidentity(8)
         assert(typeof(Radius) == "number", "Expected number for Radius got: " .. typeof(Radius))
@@ -9671,6 +10164,8 @@ function Library:CreateWindow(WindowInfo)
             Button.Padding.PaddingTop = UDim.new(0, IsCompact and 6 or 11)
             Button.Icon.SizeConstraint = IsCompact and Enum.SizeConstraint.RelativeXY or Enum.SizeConstraint.RelativeYY
         end
+
+        UpdateKeyStatusLayout()
     end
 
     function Window:IsSidebarCompacted()
@@ -9698,6 +10193,7 @@ function Library:CreateWindow(WindowInfo)
         RightWrapper.Size = UDim2.new(1, -Width - 57 - 1, 1, -16)
         Tabs.Size = UDim2.new(0, Width, 1, -70)
         Container.Size = UDim2.new(1, -Width - 1, 1, -70)
+        UpdateKeyStatusLayout()
 
         if WindowInfo.EnableCompacting then
             ApplyCompact()
@@ -11956,6 +12452,12 @@ function Library:CreateWindow(WindowInfo)
             end
         end))
     end
+    if WindowInfo.KeyStatus == true then
+        Window:AddKeyStatus({})
+    elseif typeof(WindowInfo.KeyStatus) == "table" then
+        Window:AddKeyStatus(WindowInfo.KeyStatus)
+    end
+
     if WindowInfo.EnableCompacting and WindowInfo.SidebarCompacted then
         Window:SetSidebarWidth(WindowInfo.SidebarCompactWidth)
     end
@@ -12795,6 +13297,13 @@ function Library:Unload()
         end
     end
 
+    for Index = #Library.KeyStatusComponents, 1, -1 do
+        local Component = Library.KeyStatusComponents[Index]
+        if Component and Component.Destroy then
+            Library:SafeCallback(Component.Destroy, Component)
+        end
+    end
+
     --// Destroy elements
     for Index = #Library.Tabs, 1, -1 do
         local Tab = table.remove(Library.Tabs, Index)
@@ -12843,6 +13352,7 @@ function Library:Unload()
     table.clear(Library.DraggableElements)
     table.clear(Library.KeybindToggles)
     table.clear(Library.DependencyBoxes)
+    table.clear(Library.KeyStatusComponents)
 
     table.clear(TransparencyCache)
     table.clear(ActiveTabTweens)
@@ -12852,6 +13362,9 @@ function Library:Unload()
     Library.WindowContainer = nil
     Library.KeybindFrame = nil
     Library.KeybindContainer = nil
+    Library.AnonymousModeToggle = nil
+    Library.AnonymousMode = false
+    Library.Flags.AnonymousMode = false
 
     getgenv().Library = nil
 end

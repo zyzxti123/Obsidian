@@ -181,6 +181,14 @@ local Library = {
     KeyStatusComponents = {},
     AnonymousMode = false,
     AnonymousModeToggle = nil,
+    CommandPalette = nil,
+    Commands = {},
+    FeatureBadgeStatuses = {
+        Premium = { Color = Color3.fromRGB(255, 202, 72), Priority = 1 },
+        Experimental = { Color = Color3.fromRGB(178, 112, 255), Priority = 2 },
+        Unstable = { Color = Color3.fromRGB(255, 145, 70), Priority = 3 },
+        Detected = { Color = Color3.fromRGB(245, 75, 90), Priority = 4 },
+    },
     Flags = {
         AnonymousMode = false,
     },
@@ -373,6 +381,10 @@ local Templates = {
         Footer = "No Footer",
         KeyStatus = false,
         AnonymousMode = false,
+        CommandPalette = true,
+        CommandPaletteKeybind = Enum.KeyCode.K,
+        CommandPaletteRequireControl = true,
+        CommandPaletteMaxResults = 9,
 
         Position = UDim2.fromOffset(6, 6),
         Size = UDim2.fromOffset(720, 600),
@@ -1251,6 +1263,144 @@ function Library:SetAnonymousMode(State: boolean)
     if Toggle and not Toggle.Destroyed and Toggle.Value ~= State then
         Toggle:SetValue(State)
     end
+end
+
+function Library:GetFeatureBadges(Info: { [string]: any }?): { string }
+    setthreadidentity(8)
+    local Badges = {}
+    local Added = {}
+
+    local function AddBadge(Value: unknown)
+        if typeof(Value) ~= "string" then
+            return
+        end
+
+        local NormalizedValue = string.lower(Value)
+        for Name in Library.FeatureBadgeStatuses do
+            if string.lower(Name) == NormalizedValue and not Added[Name] then
+                Added[Name] = true
+                table.insert(Badges, Name)
+                return
+            end
+        end
+    end
+
+    if typeof(Info) == "table" then
+        AddBadge(Info.Status)
+
+        if typeof(Info.Badges) == "string" then
+            AddBadge(Info.Badges)
+        elseif typeof(Info.Badges) == "table" then
+            for Key, Value in Info.Badges do
+                if typeof(Key) == "number" then
+                    AddBadge(Value)
+                elseif Value == true then
+                    AddBadge(Key)
+                end
+            end
+        end
+
+        for Name in Library.FeatureBadgeStatuses do
+            if Info[Name] == true then
+                AddBadge(Name)
+            end
+        end
+    end
+
+    table.sort(Badges, function(First: string, Second: string): boolean
+        return Library.FeatureBadgeStatuses[First].Priority < Library.FeatureBadgeStatuses[Second].Priority
+    end)
+    return Badges
+end
+
+function Library:FormatFeatureText(Text: string, Badges: { string }?): string
+    setthreadidentity(8)
+    assert(typeof(Text) == "string", "Feature text must be a string")
+
+    if typeof(Badges) ~= "table" or #Badges == 0 then
+        return Text
+    end
+
+    local Parts = table.create(#Badges)
+    for Index, Name in Badges do
+        local Status = Library.FeatureBadgeStatuses[Name]
+        if not Status then
+            continue
+        end
+
+        local Color = Status.Color
+        local Red = math.round(Color.R * 255)
+        local Green = math.round(Color.G * 255)
+        local Blue = math.round(Color.B * 255)
+        Parts[Index] = `<font color="rgb({Red},{Green},{Blue})">[{string.upper(Name)}]</font>`
+    end
+
+    return `{Text}  {table.concat(Parts, " ")}`
+end
+
+function Library:BindFeatureBadges(Element: { [string]: any }, Info: { [string]: any }, UpdateDisplay: (string) -> ()): ()
+    setthreadidentity(8)
+    local Badges = Library:GetFeatureBadges(Info)
+    Element.Badges = Badges
+
+    function Element:SetFeatureBadges(NewBadges: string | { string } | { [string]: boolean })
+        setthreadidentity(8)
+        local BadgeInfo = { Badges = NewBadges }
+        Element.Badges = Library:GetFeatureBadges(BadgeInfo)
+        UpdateDisplay(Library:FormatFeatureText(Element.Text or "", Element.Badges))
+
+        if Element.Command and not Element.Command.Destroyed then
+            Element.Command.Badges = table.clone(Element.Badges)
+            if Library.CommandPalette and Library.CommandPalette.Visible then
+                Library.CommandPalette:Refresh()
+            end
+        end
+    end
+
+    function Element:GetFeatureBadges(): { string }
+        setthreadidentity(8)
+        return table.clone(Element.Badges)
+    end
+
+    UpdateDisplay(Library:FormatFeatureText(Element.Text or "", Badges))
+end
+
+function Library:RegisterElementCommand(Element: { [string]: any }, Groupbox: { [string]: any }, Info: { [string]: any })
+    setthreadidentity(8)
+    local Window = Library.Window
+    if not Window or typeof(Window.RegisterCommand) ~= "function" or Info.CommandPalette == false then
+        return
+    end
+
+    local Text = Info.CommandName or Element.Text
+    if typeof(Text) ~= "string" or Text == "" then
+        return
+    end
+
+    local Tab = Groupbox.Tab
+    local TabName = Tab and Tab.Name or "Interface"
+    local GroupboxName = Groupbox.Name or "Controls"
+
+    Element.Command = Window:RegisterCommand({
+        Id = `Element:{tostring(Element)}`,
+        Name = Text,
+        Description = Info.CommandDescription or `{TabName} / {GroupboxName}`,
+        Keywords = Info.CommandKeywords,
+        Badges = Element.Badges,
+        Element = Element,
+        Action = function()
+            setthreadidentity(8)
+            Window:RevealElement(Element, Groupbox)
+
+            if typeof(Info.CommandAction) == "function" then
+                Library:SafeCallback(Info.CommandAction, Element)
+            elseif Element.Type == "Toggle" and not Element.Disabled then
+                Element:SetValue(not Element.Value)
+            elseif Element.Type == "Button" and not Element.Disabled and not Element.Risky and not Element.DoubleClick then
+                Library:SafeCallback(Element.Func)
+            end
+        end,
+    })
 end
 
 function IsValidCustomIcon(Icon: string)
@@ -4973,6 +5123,17 @@ do
                 Info.Disabled = Params.Disabled or false
                 Info.Visible = Params.Visible or true
                 Info.Idx = typeof(Second) == "table" and First or nil
+                Info.Status = Params.Status
+                Info.Badges = Params.Badges
+                Info.Premium = Params.Premium
+                Info.Experimental = Params.Experimental
+                Info.Unstable = Params.Unstable
+                Info.Detected = Params.Detected
+                Info.CommandPalette = Params.CommandPalette
+                Info.CommandName = Params.CommandName
+                Info.CommandDescription = Params.CommandDescription
+                Info.CommandKeywords = Params.CommandKeywords
+                Info.CommandAction = Params.CommandAction
             else
                 Info.Text = First or ""
                 Info.Func = Second or function() end
@@ -5116,6 +5277,10 @@ do
 
         Button.Base, Button.Stroke = CreateButton(Button)
         InitEvents(Button)
+        Library:BindFeatureBadges(Button, Info, function(Text: string)
+            setthreadidentity(8)
+            Button.Base.Text = Text
+        end)
 
         function Button:AddButton(...)
             setthreadidentity(8)
@@ -5278,7 +5443,7 @@ do
         function Button:SetText(Text: string)
             setthreadidentity(8)
             Button.Text = Text
-            Button.Base.Text = Text
+            Button.Base.Text = Library:FormatFeatureText(Text, Button.Badges)
         end
 
         if typeof(Button.Tooltip) == "string" or typeof(Button.DisabledTooltip) == "string" then
@@ -5303,11 +5468,17 @@ do
             table.insert(Buttons, Button)
         end
 
+        Library:RegisterElementCommand(Button, Groupbox, Info)
+
         Button.AddKeyPicker = BaseAddons.__index.AddKeyPicker
 
         function Button:Destroy()
             setthreadidentity(8)
             Button.Destroyed = true
+
+            if Button.Command then
+                Button.Command:Destroy()
+            end
 
             if Button.TooltipTable then 
                 Button.TooltipTable:Destroy() 
@@ -5399,6 +5570,10 @@ do
             TextXAlignment = Enum.TextXAlignment.Left,
             Parent = Button,
         })
+        Library:BindFeatureBadges(Toggle, Info, function(Text: string)
+            setthreadidentity(8)
+            Label.Text = Text
+        end)
 
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
@@ -5534,7 +5709,7 @@ do
         function Toggle:SetText(Text: string)
             setthreadidentity(8)
             Toggle.Text = Text
-            Label.Text = Text
+            Label.Text = Library:FormatFeatureText(Text, Toggle.Badges)
         end
 
         table.insert(Toggle.Connections, Button.MouseButton1Click:Connect(function()
@@ -5569,10 +5744,15 @@ do
         Toggle.Default = Toggle.Value
 
         Toggles[Idx] = Toggle
+        Library:RegisterElementCommand(Toggle, Groupbox, Info)
 
         function Toggle:Destroy()
             setthreadidentity(8)
             Toggle.Destroyed = true
+
+            if Toggle.Command then
+                Toggle.Command:Destroy()
+            end
 
             if Toggle.Connections then
                 for _, Connection in Toggle.Connections do
@@ -5665,6 +5845,10 @@ do
             TextXAlignment = Enum.TextXAlignment.Left,
             Parent = Button,
         })
+        Library:BindFeatureBadges(Toggle, Info, function(Text: string)
+            setthreadidentity(8)
+            Label.Text = Text
+        end)
 
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
@@ -5818,7 +6002,7 @@ do
         function Toggle:SetText(Text: string)
             setthreadidentity(8)
             Toggle.Text = Text
-            Label.Text = Text
+            Label.Text = Library:FormatFeatureText(Text, Toggle.Badges)
         end
 
         table.insert(Toggle.Connections, Button.MouseButton1Click:Connect(function()
@@ -5853,10 +6037,15 @@ do
         Toggle.Default = Toggle.Value
 
         Toggles[Idx] = Toggle
+        Library:RegisterElementCommand(Toggle, Groupbox, Info)
 
         function Toggle:Destroy()
             setthreadidentity(8)
             Toggle.Destroyed = true
+
+            if Toggle.Command then
+                Toggle.Command:Destroy()
+            end
 
             if Toggle.Connections then
                 for _, Connection in Toggle.Connections do
@@ -10066,6 +10255,543 @@ function Library:CreateWindow(WindowInfo)
         return Toggle
     end
 
+    function Window:RegisterCommand(Info: { [string]: any }): { [string]: any }
+        setthreadidentity(8)
+        assert(typeof(Info) == "table", "Command information must be a table")
+        assert(typeof(Info.Name) == "string" and Info.Name ~= "", "Command name must be a non-empty string")
+        assert(typeof(Info.Action) == "function", "Command action must be a function")
+
+        local Id = tostring(Info.Id or Info.Name)
+        for _, ExistingCommand in Library.Commands do
+            if ExistingCommand.Id == Id and not ExistingCommand.Destroyed then
+                ExistingCommand.Name = Info.Name
+                ExistingCommand.Description = tostring(Info.Description or "")
+                ExistingCommand.Keywords = Info.Keywords
+                ExistingCommand.Action = Info.Action
+                ExistingCommand.Badges = Library:GetFeatureBadges(Info)
+                ExistingCommand.Element = Info.Element
+                ExistingCommand.Visible = Info.Visible ~= false
+                ExistingCommand.Disabled = Info.Disabled == true
+                return ExistingCommand
+            end
+        end
+
+        local Command = {
+            Id = Id,
+            Name = Info.Name,
+            Description = tostring(Info.Description or ""),
+            Keywords = Info.Keywords,
+            Action = Info.Action,
+            Badges = if Info.Badges then Library:GetFeatureBadges(Info) else {},
+            Element = Info.Element,
+            Visible = Info.Visible ~= false,
+            Disabled = Info.Disabled == true,
+            Destroyed = false,
+        }
+
+        function Command:SetVisible(Visible: boolean)
+            setthreadidentity(8)
+            assert(typeof(Visible) == "boolean", "Command visibility must be a boolean")
+            Command.Visible = Visible
+            if Library.CommandPalette and Library.CommandPalette.Visible then
+                Library.CommandPalette:Refresh()
+            end
+        end
+
+        function Command:SetDisabled(Disabled: boolean)
+            setthreadidentity(8)
+            assert(typeof(Disabled) == "boolean", "Command disabled state must be a boolean")
+            Command.Disabled = Disabled
+            if Library.CommandPalette and Library.CommandPalette.Visible then
+                Library.CommandPalette:Refresh()
+            end
+        end
+
+        function Command:Destroy()
+            setthreadidentity(8)
+            if Command.Destroyed then
+                return
+            end
+
+            Command.Destroyed = true
+            local Index = table.find(Library.Commands, Command)
+            if Index then
+                table.remove(Library.Commands, Index)
+            end
+            if Library.CommandPalette and Library.CommandPalette.Visible then
+                Library.CommandPalette:Refresh()
+            end
+        end
+
+        table.insert(Library.Commands, Command)
+        if Library.CommandPalette and Library.CommandPalette.Visible then
+            Library.CommandPalette:Refresh()
+        end
+        return Command
+    end
+
+    Window.AddCommand = Window.RegisterCommand
+
+    function Window:RevealElement(Element: { [string]: any }, Groupbox: { [string]: any })
+        setthreadidentity(8)
+        if Element.Destroyed or Groupbox.Destroyed then
+            return
+        end
+
+        local Tab = Groupbox.Tab
+        if Tab and typeof(Tab.Show) == "function" then
+            Tab:Show()
+        end
+        if Groupbox.Type == "TabboxTab" and typeof(Groupbox.Show) == "function" then
+            Groupbox:Show()
+        elseif Groupbox.Type == "Groupbox" and Groupbox.Collapsed then
+            Groupbox:SetCollapsed(false)
+        end
+
+        task.defer(function()
+            setthreadidentity(8)
+            if Element.Destroyed or not Element.Holder or not Element.Holder.Parent or not Tab then
+                return
+            end
+
+            for _, Side in Tab.Sides or {} do
+                if Element.Holder:IsDescendantOf(Side) then
+                    local Offset = Element.Holder.AbsolutePosition.Y - Side.AbsolutePosition.Y + Side.CanvasPosition.Y - 12
+                    Side.CanvasPosition = Vector2.new(Side.CanvasPosition.X, math.max(0, Offset))
+                    break
+                end
+            end
+        end)
+    end
+
+    function Window:CreateCommandPalette(): { [string]: any }?
+        setthreadidentity(8)
+        if WindowInfo.CommandPalette == false then
+            return nil
+        elseif Library.CommandPalette and not Library.CommandPalette.Destroyed then
+            return Library.CommandPalette
+        end
+
+        local Overlay = New("TextButton", {
+            AutoButtonColor = false,
+            BackgroundColor3 = "DarkColor",
+            BackgroundTransparency = 0.35,
+            Size = UDim2.fromScale(1, 1),
+            Text = "",
+            Visible = false,
+            ZIndex = 100,
+            Parent = MainFrame,
+        })
+        local Panel = New("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundColor3 = "BackgroundColor",
+            Position = UDim2.fromScale(0.5, 0.5),
+            Size = UDim2.new(0.76, 0, 0, 380),
+            ZIndex = 101,
+            Parent = Overlay,
+        })
+        New("UISizeConstraint", {
+            MaxSize = Vector2.new(580, 380),
+            MinSize = Vector2.new(340, 300),
+            Parent = Panel,
+        })
+        table.insert(Library.Corners, New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = Panel,
+        }))
+        Library:AddOutline(Panel)
+
+        local Header = New("Frame", {
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 54),
+            ZIndex = 102,
+            Parent = Panel,
+        })
+        Library:MakeLine(Header, {
+            AnchorPoint = Vector2.new(0, 1),
+            Position = UDim2.fromScale(0, 1),
+            Size = UDim2.new(1, 0, 0, 1),
+            ZIndex = 102,
+        })
+        local SearchIcon = Library:GetCustomIcon("search")
+        if SearchIcon then
+            New("ImageLabel", {
+                Image = SearchIcon.Url,
+                ImageColor3 = "FontColor",
+                ImageRectOffset = SearchIcon.ImageRectOffset,
+                ImageRectSize = SearchIcon.ImageRectSize,
+                ImageTransparency = 0.4,
+                Position = UDim2.fromOffset(15, 15),
+                Size = UDim2.fromOffset(24, 24),
+                ZIndex = 103,
+                Parent = Header,
+            })
+        end
+        local QueryBox = New("TextBox", {
+            BackgroundTransparency = 1,
+            ClearTextOnFocus = false,
+            PlaceholderText = "Search commands and features...",
+            Position = UDim2.fromOffset(49, 0),
+            Size = UDim2.new(1, -104, 1, 0),
+            Text = "",
+            TextSize = 16,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 103,
+            Parent = Header,
+        })
+        local ShortcutLabel = New("TextLabel", {
+            AnchorPoint = Vector2.new(1, 0.5),
+            BackgroundColor3 = "MainColor",
+            Position = UDim2.new(1, -12, 0.5, 0),
+            Size = UDim2.fromOffset(42, 24),
+            Text = "ESC",
+            TextSize = 11,
+            TextTransparency = 0.35,
+            ZIndex = 103,
+            Parent = Header,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+            Parent = ShortcutLabel,
+        })
+        New("UIStroke", {
+            Color = "OutlineColor",
+            Parent = ShortcutLabel,
+        })
+
+        local Results = New("ScrollingFrame", {
+            AutomaticCanvasSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1,
+            CanvasSize = UDim2.fromScale(0, 0),
+            Position = UDim2.fromOffset(0, 55),
+            ScrollBarThickness = 2,
+            Size = UDim2.new(1, 0, 1, -84),
+            ZIndex = 102,
+            Parent = Panel,
+        })
+        New("UIListLayout", {
+            Padding = UDim.new(0, 3),
+            Parent = Results,
+        })
+        New("UIPadding", {
+            PaddingBottom = UDim.new(0, 6),
+            PaddingLeft = UDim.new(0, 6),
+            PaddingRight = UDim.new(0, 6),
+            PaddingTop = UDim.new(0, 6),
+            Parent = Results,
+        })
+
+        local EmptyLabel = New("TextLabel", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundTransparency = 1,
+            Position = UDim2.fromScale(0.5, 0.55),
+            Size = UDim2.new(1, -30, 0, 50),
+            Text = "No matching commands",
+            TextSize = 14,
+            TextTransparency = 0.5,
+            Visible = false,
+            ZIndex = 103,
+            Parent = Panel,
+        })
+        local Footer = New("TextLabel", {
+            AnchorPoint = Vector2.new(0, 1),
+            BackgroundColor3 = "MainColor",
+            Position = UDim2.fromScale(0, 1),
+            Size = UDim2.new(1, 0, 0, 29),
+            Text = "↑↓ Navigate     Enter Run     Esc Close",
+            TextSize = 11,
+            TextTransparency = 0.5,
+            ZIndex = 102,
+            Parent = Panel,
+        })
+        table.insert(Library.Corners, New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = Footer,
+        }))
+
+        local Palette = {
+            Type = "CommandPalette",
+            Container = Overlay,
+            Panel = Panel,
+            QueryBox = QueryBox,
+            Results = Results,
+            ResultButtons = {},
+            FilteredCommands = {},
+            SelectedIndex = 1,
+            Visible = false,
+            Destroyed = false,
+        }
+
+        local function GetCommandSearchText(Command: { [string]: any }): string
+            local Keywords = Command.Keywords
+            local KeywordText = ""
+            if typeof(Keywords) == "string" then
+                KeywordText = Keywords
+            elseif typeof(Keywords) == "table" then
+                KeywordText = table.concat(Keywords, " ")
+            end
+            return string.lower(`{Command.Name} {Command.Description} {KeywordText} {table.concat(Command.Badges or {}, " ")}`)
+        end
+
+        function Palette:Execute(Index: number?)
+            setthreadidentity(8)
+            local Command = Palette.FilteredCommands[Index or Palette.SelectedIndex]
+            if not Command or Command.Disabled or Command.Destroyed then
+                return
+            end
+
+            Palette:Close()
+            task.defer(function()
+                setthreadidentity(8)
+                Library:SafeCallback(Command.Action, Command)
+            end)
+        end
+
+        function Palette:SetSelected(Index: number)
+            setthreadidentity(8)
+            local Count = #Palette.FilteredCommands
+            if Count == 0 then
+                Palette.SelectedIndex = 0
+                return
+            end
+
+            Palette.SelectedIndex = (Index - 1) % Count + 1
+            for ButtonIndex, Button in Palette.ResultButtons do
+                local Selected = ButtonIndex == Palette.SelectedIndex
+                Button.BackgroundTransparency = Selected and 0 or 1
+                Button.BackgroundColor3 = Selected and Library.Scheme.MainColor or Library.Scheme.BackgroundColor
+                Library.Registry[Button].BackgroundColor3 = Selected and "MainColor" or "BackgroundColor"
+            end
+
+            local SelectedButton = Palette.ResultButtons[Palette.SelectedIndex]
+            if SelectedButton then
+                local Top = SelectedButton.AbsolutePosition.Y - Results.AbsolutePosition.Y + Results.CanvasPosition.Y
+                local Bottom = Top + SelectedButton.AbsoluteSize.Y
+                if Top < Results.CanvasPosition.Y then
+                    Results.CanvasPosition = Vector2.new(0, Top)
+                elseif Bottom > Results.CanvasPosition.Y + Results.AbsoluteSize.Y then
+                    Results.CanvasPosition = Vector2.new(0, Bottom - Results.AbsoluteSize.Y)
+                end
+            end
+        end
+
+        function Palette:Refresh()
+            setthreadidentity(8)
+            if Palette.Destroyed then
+                return
+            end
+
+            for _, Button in Palette.ResultButtons do
+                Button:Destroy()
+            end
+            table.clear(Palette.ResultButtons)
+            table.clear(Palette.FilteredCommands)
+
+            local Query = string.lower(Trim(QueryBox.Text))
+            local RankedCommands = {}
+
+            for Index = #Library.Commands, 1, -1 do
+                local Command = Library.Commands[Index]
+                if Command.Destroyed or (Command.Element and Command.Element.Destroyed) then
+                    table.remove(Library.Commands, Index)
+                    continue
+                elseif not Command.Visible then
+                    continue
+                end
+
+                local SearchText = GetCommandSearchText(Command)
+                local MatchPosition = if Query == "" then 1 else string.find(SearchText, Query, 1, true)
+                if not MatchPosition then
+                    continue
+                end
+
+                local Name = string.lower(Command.Name)
+                local Score = if Query == "" then 3 elseif string.sub(Name, 1, #Query) == Query then 0 elseif string.find(Name, Query, 1, true) then 1 else 2
+                table.insert(RankedCommands, { Command = Command, Score = Score, Order = Index })
+            end
+
+            table.sort(RankedCommands, function(First, Second)
+                if First.Score ~= Second.Score then
+                    return First.Score < Second.Score
+                end
+                return First.Order < Second.Order
+            end)
+
+            local MaximumResults = math.max(1, WindowInfo.CommandPaletteMaxResults)
+            for Index = 1, math.min(#RankedCommands, MaximumResults) do
+                local Command = RankedCommands[Index].Command
+                table.insert(Palette.FilteredCommands, Command)
+
+                local Button = New("TextButton", {
+                    AutoButtonColor = false,
+                    BackgroundColor3 = "BackgroundColor",
+                    BackgroundTransparency = 1,
+                    Size = UDim2.new(1, 0, 0, 48),
+                    Text = "",
+                    ZIndex = 103,
+                    Parent = Results,
+                })
+                table.insert(Library.Corners, New("UICorner", {
+                    CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+                    Parent = Button,
+                }))
+                local NameLabel = New("TextLabel", {
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromOffset(12, 5),
+                    Size = UDim2.new(1, -24, 0, 20),
+                    Text = Library:FormatFeatureText(Command.Name, Command.Badges),
+                    TextSize = 14,
+                    TextTransparency = Command.Disabled and 0.65 or 0,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    ZIndex = 104,
+                    Parent = Button,
+                })
+                New("TextLabel", {
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromOffset(12, 25),
+                    Size = UDim2.new(1, -24, 0, 17),
+                    Text = Command.Description,
+                    TextSize = 11,
+                    TextTransparency = 0.55,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    ZIndex = 104,
+                    Parent = Button,
+                })
+                if Command.Disabled then
+                    NameLabel.TextTransparency = 0.65
+                end
+
+                Library:GiveSignal(Button.MouseButton1Click:Connect(function()
+                    setthreadidentity(8)
+                    Palette:Execute(Index)
+                end))
+                Library:GiveSignal(Button.MouseEnter:Connect(function()
+                    setthreadidentity(8)
+                    Palette:SetSelected(Index)
+                end))
+                Palette.ResultButtons[Index] = Button
+            end
+
+            EmptyLabel.Visible = #Palette.FilteredCommands == 0
+            Palette:SetSelected(math.clamp(Palette.SelectedIndex, 1, math.max(#Palette.FilteredCommands, 1)))
+        end
+
+        function Palette:Open()
+            setthreadidentity(8)
+            if Palette.Destroyed or Palette.Visible then
+                return
+            end
+
+            if not Library.Toggled then
+                Window:Toggle(true)
+            end
+            Palette.Visible = true
+            Overlay.Visible = true
+            QueryBox.Text = ""
+            Palette.SelectedIndex = 1
+            Palette:Refresh()
+            task.defer(QueryBox.CaptureFocus, QueryBox)
+        end
+
+        function Palette:Close()
+            setthreadidentity(8)
+            if not Palette.Visible then
+                return
+            end
+
+            Palette.Visible = false
+            QueryBox:ReleaseFocus()
+            Overlay.Visible = false
+        end
+
+        function Palette:Toggle()
+            setthreadidentity(8)
+            if Palette.Visible then
+                Palette:Close()
+            else
+                Palette:Open()
+            end
+        end
+
+        function Palette:Destroy()
+            setthreadidentity(8)
+            if Palette.Destroyed then
+                return
+            end
+            Palette.Destroyed = true
+            Overlay:Destroy()
+            Library.CommandPalette = nil
+        end
+
+        Library:GiveSignal(QueryBox:GetPropertyChangedSignal("Text"):Connect(function()
+            setthreadidentity(8)
+            Palette.SelectedIndex = 1
+            Palette:Refresh()
+        end))
+        Library:GiveSignal(UserInputService.InputBegan:Connect(function(Input: InputObject, Processed: boolean)
+            setthreadidentity(8)
+            if Library.Unloaded then
+                return
+            end
+
+            if Palette.Visible then
+                if Input.KeyCode == Enum.KeyCode.Escape then
+                    Palette:Close()
+                elseif Input.KeyCode == Enum.KeyCode.Up then
+                    Palette:SetSelected(Palette.SelectedIndex - 1)
+                elseif Input.KeyCode == Enum.KeyCode.Down then
+                    Palette:SetSelected(Palette.SelectedIndex + 1)
+                elseif Input.KeyCode == Enum.KeyCode.Return or Input.KeyCode == Enum.KeyCode.KeypadEnter then
+                    Palette:Execute()
+                end
+                return
+            end
+
+            if Processed or Input.KeyCode ~= WindowInfo.CommandPaletteKeybind then
+                return
+            end
+
+            local ControlPressed = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+                or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
+            if not WindowInfo.CommandPaletteRequireControl or ControlPressed then
+                Palette:Open()
+            end
+        end))
+        Library:GiveSignal(Overlay.MouseButton1Click:Connect(function()
+            setthreadidentity(8)
+            local MousePosition = UserInputService:GetMouseLocation()
+            local PanelPosition = Panel.AbsolutePosition
+            local PanelSize = Panel.AbsoluteSize
+            local InsidePanel = MousePosition.X >= PanelPosition.X
+                and MousePosition.X <= PanelPosition.X + PanelSize.X
+                and MousePosition.Y >= PanelPosition.Y
+                and MousePosition.Y <= PanelPosition.Y + PanelSize.Y
+            if not InsidePanel then
+                Palette:Close()
+            end
+        end))
+
+        Library.CommandPalette = Palette
+        return Palette
+    end
+
+    function Window:OpenCommandPalette()
+        setthreadidentity(8)
+        local Palette = Window:CreateCommandPalette()
+        if Palette then
+            Palette:Open()
+        end
+    end
+
+    function Window:CloseCommandPalette()
+        setthreadidentity(8)
+        if Library.CommandPalette then
+            Library.CommandPalette:Close()
+        end
+    end
+
     function Window:SetCornerRadius(Radius: number)
         setthreadidentity(8)
         assert(typeof(Radius) == "number", "Expected number for Radius got: " .. typeof(Radius))
@@ -10478,6 +11204,7 @@ function Library:CreateWindow(WindowInfo)
 
         --// Tab Table \\--
         local Tab = {
+            Name = Name,
             Description = Description,
 
             Connections = {},
@@ -10785,6 +11512,8 @@ function Library:CreateWindow(WindowInfo)
                 })
 
                 local Tab = {
+                    Type = "TabboxTab",
+                    Name = Name,
                     Connections = {},
                     Destroyed = false,
 
@@ -11059,6 +11788,7 @@ function Library:CreateWindow(WindowInfo)
 
             local Groupbox = {
                 Type = "Groupbox",
+                Name = Info.Name,
 
                 Connections = {},
                 Destroyed = false,
@@ -11344,6 +12074,10 @@ function Library:CreateWindow(WindowInfo)
             setthreadidentity(8)
             Tab.Destroyed = true
 
+            if Tab.Command then
+                Tab.Command:Destroy()
+            end
+
             if Tab.Connections then
                 for _, Connection in Tab.Connections do
                     Connection:Disconnect()
@@ -11406,6 +12140,17 @@ function Library:CreateWindow(WindowInfo)
         TabButton.MouseButton1Click:Connect(Tab.Show)
 
         Library.Tabs[Name] = Tab
+
+        Tab.Command = Window:RegisterCommand({
+            Id = `Tab:{Name}`,
+            Name = `Open {Name}`,
+            Description = Description or "Navigate to tab",
+            Keywords = { Name, "tab", "navigate", "open" },
+            Action = function()
+                setthreadidentity(8)
+                Tab:Show()
+            end,
+        })
 
         return Tab
     end
@@ -12458,6 +13203,10 @@ function Library:CreateWindow(WindowInfo)
         Window:AddKeyStatus(WindowInfo.KeyStatus)
     end
 
+    if WindowInfo.CommandPalette then
+        Window:CreateCommandPalette()
+    end
+
     if WindowInfo.EnableCompacting and WindowInfo.SidebarCompacted then
         Window:SetSidebarWidth(WindowInfo.SidebarCompactWidth)
     end
@@ -13297,6 +14046,10 @@ function Library:Unload()
         end
     end
 
+    if Library.CommandPalette and Library.CommandPalette.Destroy then
+        Library:SafeCallback(Library.CommandPalette.Destroy, Library.CommandPalette)
+    end
+
     for Index = #Library.KeyStatusComponents, 1, -1 do
         local Component = Library.KeyStatusComponents[Index]
         if Component and Component.Destroy then
@@ -13353,6 +14106,7 @@ function Library:Unload()
     table.clear(Library.KeybindToggles)
     table.clear(Library.DependencyBoxes)
     table.clear(Library.KeyStatusComponents)
+    table.clear(Library.Commands)
 
     table.clear(TransparencyCache)
     table.clear(ActiveTabTweens)
@@ -13365,6 +14119,7 @@ function Library:Unload()
     Library.AnonymousModeToggle = nil
     Library.AnonymousMode = false
     Library.Flags.AnonymousMode = false
+    Library.CommandPalette = nil
 
     getgenv().Library = nil
 end

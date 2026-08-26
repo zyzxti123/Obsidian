@@ -1237,16 +1237,8 @@ function Library:GetLuarmorKeyStatus(Overrides: { [string]: any }?): { [string]:
     Info.Developer = IsDeveloper
     Info.Status = if IsDeveloper then "Developer" else Info.Status or (if IsPremium == true or HasScriptKey then "Premium" else "Freemium")
 
-    if IsDeveloper then
-        Info.RemainingTime = math.huge
-        Info.Lifetime = math.huge
-        Info.LifetimeText = "Lifetime"
-    elseif Info.RemainingTime == nil and typeof(SecondsLeft) == "number" then
-        Info.RemainingTime = SecondsLeft
-    end
-
-    if Info.RemainingTime == nil and (IsDeveloper or HasScriptKey) then
-        Info.RemainingTime = math.huge
+    if Info.RemainingTime == nil and typeof(SecondsLeft) == "number" then
+        Info.RemainingTime = if SecondsLeft < 0 then math.huge else SecondsLeft
     end
 
     if Info.Lifetime == nil and typeof(Info.RemainingTime) == "number" then
@@ -1255,6 +1247,8 @@ function Library:GetLuarmorKeyStatus(Overrides: { [string]: any }?): { [string]:
 
     if Info.LifetimeText == nil and Info.RemainingTime == math.huge then
         Info.LifetimeText = "Lifetime"
+    elseif Info.LifetimeText == nil and Info.RemainingTime == nil and (IsDeveloper or IsPremium == true or HasScriptKey) then
+        Info.LifetimeText = "Expiration unavailable"
     end
 
     return Info
@@ -9962,7 +9956,7 @@ function Library:CreateWindow(WindowInfo)
             BackgroundTransparency = 1,
             Position = UDim2.fromOffset(10, 67),
             Size = UDim2.new(0.5, -10, 0, 16),
-            Text = "Key lifetime",
+            Text = "Access remaining",
             TextSize = 12,
             TextTransparency = 0.5,
             TextXAlignment = Enum.TextXAlignment.Left,
@@ -10093,7 +10087,8 @@ function Library:CreateWindow(WindowInfo)
                     end
                 end
             else
-                RemainingLabel.Text = Data.LifetimeText or (if Status == "Developer" then "Unlimited" else "No active key")
+                RemainingLabel.Text = Data.LifetimeText
+                    or (if Status == "Developer" or Status == "Premium" then "Expiration unavailable" else "No active key")
             end
 
             StatusLabel.Text = Expired and "Expired" or Status

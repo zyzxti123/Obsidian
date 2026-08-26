@@ -1226,12 +1226,31 @@ function Library:GetLuarmorKeyStatus(Overrides: { [string]: any }?): { [string]:
     local Info = table.clone(Overrides or {})
     local IsPremium = LRM_IsUserPremium
     local SecondsLeft = LRM_SecondsLeft
+    local UserNote = tostring(LRM_UserNote or "")
+    local NormalizedNote = string.lower(string.gsub(UserNote, "^%s*(.-)%s*$", "%1"))
+    local Environment = getgenv and getgenv() or _G
+    local ScriptKey = type(Environment) == "table" and rawget(Environment, "script_key") or nil
+    local HasScriptKey = typeof(ScriptKey) == "string" and ScriptKey ~= ""
+    local IsDeveloper = Info.Developer == true or NormalizedNote == "developer"
 
     Info.Provider = "Luarmor"
-    Info.Status = Info.Status or (if Info.Developer == true then "Developer" elseif IsPremium == true then "Premium" else "Freemium")
+    Info.Developer = IsDeveloper
+    Info.Status = if IsDeveloper then "Developer" else Info.Status or (if IsPremium == true or HasScriptKey then "Premium" else "Freemium")
 
-    if Info.RemainingTime == nil and typeof(SecondsLeft) == "number" then
+    if IsDeveloper then
+        Info.RemainingTime = math.huge
+        Info.Lifetime = math.huge
+        Info.LifetimeText = "Lifetime"
+    elseif Info.RemainingTime == nil and typeof(SecondsLeft) == "number" then
         Info.RemainingTime = SecondsLeft
+    end
+
+    if Info.RemainingTime == nil and (IsDeveloper or HasScriptKey) then
+        Info.RemainingTime = math.huge
+    end
+
+    if Info.Lifetime == nil and typeof(Info.RemainingTime) == "number" then
+        Info.Lifetime = Info.RemainingTime
     end
 
     if Info.LifetimeText == nil and Info.RemainingTime == math.huge then

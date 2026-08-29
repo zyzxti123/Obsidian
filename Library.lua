@@ -11150,8 +11150,9 @@ function Library:CreateWindow(WindowInfo)
         -- Sub Tabs
         local SubTabHolder = New("Frame", {
             BackgroundColor3 = "BackgroundColor",
+            ClipsDescendants = true,
             Position = UDim2.fromOffset(2, 2),
-            Size = UDim2.new(1, -4, 0, 36),
+            Size = UDim2.new(1, -4, 0, 34),
             Visible = false,
             ZIndex = 3,
             Parent = TabContainer,
@@ -11377,7 +11378,7 @@ function Library:CreateWindow(WindowInfo)
 
         function Tab:RefreshSides()
             setthreadidentity(8)
-            local SubTabOffset = SubTabHolder.Visible and 42 or 0
+            local SubTabOffset = SubTabHolder.Visible and 38 or 0
             local WarningOffset = WarningBoxHolder.Visible and WarningBox.Size.Y.Offset + 8 or 0
             local Offset = SubTabOffset + WarningOffset
 
@@ -11491,7 +11492,7 @@ function Library:CreateWindow(WindowInfo)
                 BackgroundColor3 = "MainColor",
                 BackgroundTransparency = 0,
                 LayoutOrder = SubTabInfo.Order or SubTabIndex,
-                Size = UDim2.fromOffset(0, 36),
+                Size = UDim2.fromOffset(0, 34),
                 Text = "",
                 ZIndex = 3,
                 Parent = SubTabButtons,
@@ -11546,8 +11547,18 @@ function Library:CreateWindow(WindowInfo)
             })
             local Line = Library:MakeLine(Button, {
                 AnchorPoint = Vector2.new(0, 1),
-                Position = UDim2.new(0, 0, 1, 1),
+                Position = UDim2.fromScale(0, 1),
                 Size = UDim2.new(1, 0, 0, 1),
+            })
+            local ActiveLine = New("Frame", {
+                AnchorPoint = Vector2.new(0, 1),
+                BackgroundColor3 = "AccentColor",
+                BorderSizePixel = 0,
+                Position = UDim2.fromScale(0, 1),
+                Size = UDim2.new(1, 0, 0, 2),
+                Visible = false,
+                ZIndex = 4,
+                Parent = Button,
             })
 
             local Canvas = New("CanvasGroup", {
@@ -11617,16 +11628,7 @@ function Library:CreateWindow(WindowInfo)
 
             function SubTab:UpdateCorners(FirstSubTab, LastSubTab)
                 setthreadidentity(8)
-                local Radius = WindowInfo.CornerRadius
-
-                if not FirstSubTab and not LastSubTab then
-                    FirstSubTab, LastSubTab = GetVisibleSubTabBoundaries()
-                end
-
-                ButtonCorner.TopLeftRadius = UDim.new(0, SubTab == FirstSubTab and Radius or 0)
-                ButtonCorner.BottomLeftRadius = UDim.new(0, SubTab == FirstSubTab and Radius or 0)
-                ButtonCorner.TopRightRadius = UDim.new(0, SubTab == LastSubTab and Radius or 0)
-                ButtonCorner.BottomRightRadius = UDim.new(0, SubTab == LastSubTab and Radius or 0)
+                ButtonCorner.CornerRadius = UDim.new(0, 0)
             end
 
             function SubTab:Show()
@@ -11643,7 +11645,8 @@ function Library:CreateWindow(WindowInfo)
                 if ButtonIcon then
                     ButtonIcon.ImageTransparency = 0
                 end
-                Line.Visible = false
+                Line.Visible = true
+                ActiveLine.Visible = true
 
                 Tab.Sides = SubTab.Sides
                 Tab.ActiveSubTab = SubTab
@@ -11667,6 +11670,7 @@ function Library:CreateWindow(WindowInfo)
                     ButtonIcon.ImageTransparency = 0.5
                 end
                 Line.Visible = true
+                ActiveLine.Visible = false
                 Library:PlayTabAnimation(Canvas, false)
 
                 if Tab.ActiveSubTab == SubTab then

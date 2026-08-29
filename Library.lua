@@ -452,11 +452,13 @@ local Templates = {
         Lifetime = nil,
         GetRemainingTime = nil,
         LifetimeText = nil,
+        DurationLabel = "Access remaining",
         StatusColors = {
             Freemium = Color3.fromRGB(145, 145, 155),
             Premium = Color3.fromRGB(125, 85, 255),
             Developer = Color3.fromRGB(67, 196, 128),
             Expired = Color3.fromRGB(235, 75, 75),
+            ["IN-DEV"] = Color3.fromRGB(245, 185, 70),
         },
     },
     Dialog = {
@@ -1227,17 +1229,27 @@ function Library:GetLuarmorKeyStatus(Overrides: { [string]: any }?): { [string]:
     local IsPremium = LRM_IsUserPremium
     local SecondsLeft = LRM_SecondsLeft
     local UserNote = tostring(LRM_UserNote or "")
+    local ScriptVersion = tostring(LRM_ScriptVersion or "")
     local NormalizedNote = string.lower(string.gsub(UserNote, "^%s*(.-)%s*$", "%1"))
     local Environment = getgenv and getgenv() or _G
     local ScriptKey = type(Environment) == "table" and rawget(Environment, "script_key") or nil
     local HasScriptKey = typeof(ScriptKey) == "string" and ScriptKey ~= ""
     local IsDeveloper = Info.Developer == true or NormalizedNote == "developer"
+    local IsDevelopmentEnvironment = string.upper(ScriptVersion) == "IN-DEV"
 
     Info.Provider = "Luarmor"
-    Info.Developer = IsDeveloper
-    Info.Status = if IsDeveloper then "Developer" else Info.Status or (if IsPremium == true or HasScriptKey then "Premium" else "Freemium")
+    Info.Developer = IsDeveloper or IsDevelopmentEnvironment
+    Info.Status = if IsDevelopmentEnvironment
+        then "IN-DEV"
+        elseif IsDeveloper then "Developer"
+        else Info.Status or (if IsPremium == true or HasScriptKey then "Premium" else "Freemium")
 
-    if Info.RemainingTime == nil and typeof(SecondsLeft) == "number" then
+    if IsDevelopmentEnvironment then
+        Info.RemainingTime = math.huge
+        Info.Lifetime = math.huge
+        Info.LifetimeText = "IN-DEV"
+        Info.DurationLabel = "Environment"
+    elseif Info.RemainingTime == nil and typeof(SecondsLeft) == "number" then
         Info.RemainingTime = if SecondsLeft < 0 then math.huge else SecondsLeft
     end
 
@@ -9956,7 +9968,7 @@ function Library:CreateWindow(WindowInfo)
             BackgroundTransparency = 1,
             Position = UDim2.fromOffset(10, 67),
             Size = UDim2.new(0.5, -10, 0, 16),
-            Text = "Access remaining",
+            Text = tostring(Data.DurationLabel),
             TextSize = 12,
             TextTransparency = 0.5,
             TextXAlignment = Enum.TextXAlignment.Left,
@@ -10355,6 +10367,9 @@ function Library:CreateWindow(WindowInfo)
         local Tab = Groupbox.Tab
         if Tab and typeof(Tab.Show) == "function" then
             Tab:Show()
+        end
+        if Groupbox.SubTab and typeof(Groupbox.SubTab.Show) == "function" then
+            Groupbox.SubTab:Show()
         end
         if Groupbox.Type == "TabboxTab" and typeof(Groupbox.Show) == "function" then
             Groupbox:Show()
@@ -10844,6 +10859,9 @@ function Library:CreateWindow(WindowInfo)
             for _, Tabbox in Tab.Tabboxes do
                 Tabbox:UpdateCorners()
             end
+            for _, SubTab in Tab.SubTabOrder or {} do
+                SubTab:UpdateCorners()
+            end
         end
     end
 
@@ -11129,6 +11147,33 @@ function Library:CreateWindow(WindowInfo)
             end
         end
 
+        -- Sub Tabs
+        local SubTabHolder = New("Frame", {
+            BackgroundColor3 = "BackgroundColor",
+            Position = UDim2.fromOffset(2, 2),
+            Size = UDim2.new(1, -4, 0, 36),
+            Visible = false,
+            ZIndex = 3,
+            Parent = TabContainer,
+        })
+        local SubTabHolderCorner = New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = SubTabHolder,
+        })
+        table.insert(Library.Corners, SubTabHolderCorner)
+        Library:AddOutline(SubTabHolder)
+
+        local SubTabButtons = New("Frame", {
+            BackgroundTransparency = 1,
+            Size = UDim2.fromScale(1, 1),
+            Parent = SubTabHolder,
+        })
+        New("UIListLayout", {
+            FillDirection = Enum.FillDirection.Horizontal,
+            HorizontalFlex = Enum.UIFlexAlignment.Fill,
+            Parent = SubTabButtons,
+        })
+
         --// Warning Box \\--
         local WarningBoxHolder = New("Frame", {
             AutomaticSize = Enum.AutomaticSize.Y,
@@ -11136,6 +11181,7 @@ function Library:CreateWindow(WindowInfo)
             Position = UDim2.fromOffset(0, 7),
             Size = UDim2.fromScale(1, 0),
             Visible = false,
+            ZIndex = 3,
             Parent = TabContainer,
         })
 
@@ -11226,10 +11272,18 @@ function Library:CreateWindow(WindowInfo)
 
             Window = Window,
             Canvas = TabCanvas,
+            RootSides = {
+                TabLeft,
+                TabRight,
+            },
             Sides = {
                 TabLeft,
                 TabRight,
             },
+            SubTabs = {},
+            SubTabOrder = {},
+            ActiveSubTab = nil,
+            SubTabHolder = SubTabHolder,
             WarningBox = {
                 IsNormal = false,
                 LockSize = false,
@@ -11323,7 +11377,11 @@ function Library:CreateWindow(WindowInfo)
 
         function Tab:RefreshSides()
             setthreadidentity(8)
-            local Offset = WarningBoxHolder.Visible and WarningBox.Size.Y.Offset + 8 or 0
+            local SubTabOffset = SubTabHolder.Visible and 42 or 0
+            local WarningOffset = WarningBoxHolder.Visible and WarningBox.Size.Y.Offset + 8 or 0
+            local Offset = SubTabOffset + WarningOffset
+
+            WarningBoxHolder.Position = UDim2.fromOffset(0, SubTabOffset + 7)
             for _, Side in Tab.Sides do
                 Side.Position = UDim2.new(Side.Position.X.Scale, 0, 0, Offset)
                 Side.Size = UDim2.new(0.5, -3, 1, -Offset)
@@ -11356,15 +11414,408 @@ function Library:CreateWindow(WindowInfo)
             Tab:RefreshSides()
         end
 
+        local function GetVisibleSubTabBoundaries()
+            local FirstSubTab
+            local LastSubTab
+
+            for _, SubTab in Tab.SubTabOrder do
+                if SubTab.Destroyed or not SubTab.Visible then
+                    continue
+                end
+
+                if not FirstSubTab or SubTab.Button.LayoutOrder < FirstSubTab.Button.LayoutOrder then
+                    FirstSubTab = SubTab
+                end
+                if not LastSubTab or SubTab.Button.LayoutOrder >= LastSubTab.Button.LayoutOrder then
+                    LastSubTab = SubTab
+                end
+            end
+
+            return FirstSubTab, LastSubTab
+        end
+
+        function Tab:RefreshSubTabs()
+            setthreadidentity(8)
+            if Tab.Destroyed then
+                return
+            end
+
+            local FirstSubTab, LastSubTab = GetVisibleSubTabBoundaries()
+            local HasVisibleSubTabs = FirstSubTab ~= nil
+
+            SubTabHolder.Visible = HasVisibleSubTabs
+            Tab.RootSides[1].Visible = not HasVisibleSubTabs
+            Tab.RootSides[2].Visible = not HasVisibleSubTabs
+
+            if not HasVisibleSubTabs then
+                if Tab.ActiveSubTab then
+                    Tab.ActiveSubTab:Hide()
+                end
+                Tab.Sides = Tab.RootSides
+            elseif not Tab.ActiveSubTab or not Tab.ActiveSubTab.Visible or Tab.ActiveSubTab.Destroyed then
+                FirstSubTab:Show()
+            end
+
+            for _, SubTab in Tab.SubTabOrder do
+                if not SubTab.Destroyed then
+                    SubTab:UpdateCorners(FirstSubTab, LastSubTab)
+                end
+            end
+            Tab:RefreshSides()
+        end
+
+        function Tab:AddSubTab(...)
+            setthreadidentity(8)
+            local SubTabInfo
+
+            if select("#", ...) == 1 and typeof(...) == "table" then
+                SubTabInfo = select(1, ...)
+            else
+                SubTabInfo = {
+                    Name = select(1, ...),
+                    Icon = select(2, ...),
+                    Order = select(3, ...),
+                }
+            end
+
+            local SubTabName = SubTabInfo.Name or "Sub Tab"
+            local SubTabIcon = Library:GetCustomIcon(SubTabInfo.Icon)
+            local SubTabIndex = #Tab.SubTabOrder + 1
+            local StorageIndex = SubTabName
+
+            if Tab.SubTabs[StorageIndex] then
+                StorageIndex = `{SubTabName} {SubTabIndex}`
+            end
+
+            local Button = New("TextButton", {
+                BackgroundColor3 = "MainColor",
+                BackgroundTransparency = 0,
+                LayoutOrder = SubTabInfo.Order or SubTabIndex,
+                Size = UDim2.fromOffset(0, 36),
+                Text = "",
+                ZIndex = 3,
+                Parent = SubTabButtons,
+            })
+            local ButtonCorner = New("UICorner", {
+                CornerRadius = UDim.new(0, 0),
+                Parent = Button,
+            })
+            table.insert(Library.SpecificCorners, ButtonCorner)
+
+            local ButtonContent = New("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                Position = UDim2.fromScale(0.5, 0.5),
+                Size = UDim2.fromOffset(0, 18),
+                Parent = Button,
+            })
+            New("UIListLayout", {
+                FillDirection = Enum.FillDirection.Horizontal,
+                HorizontalAlignment = Enum.HorizontalAlignment.Center,
+                Padding = UDim.new(0, 7),
+                VerticalAlignment = Enum.VerticalAlignment.Center,
+                Parent = ButtonContent,
+            })
+
+            local ButtonIcon
+
+            if SubTabIcon then
+                ButtonIcon = New("ImageLabel", {
+                    BackgroundTransparency = 1,
+                    Image = SubTabIcon.Url,
+                    ImageColor3 = SubTabIcon.Custom and "WhiteColor" or "AccentColor",
+                    ImageRectOffset = SubTabIcon.ImageRectOffset,
+                    ImageRectSize = SubTabIcon.ImageRectSize,
+                    ImageTransparency = 0.5,
+                    Size = UDim2.fromOffset(18, 18),
+                    ZIndex = 3,
+                    Parent = ButtonContent,
+                })
+            end
+
+            local ButtonLabel = New("TextLabel", {
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                Size = UDim2.fromOffset(0, 18),
+                Text = SubTabName,
+                TextSize = 15,
+                TextTransparency = 0.5,
+                ZIndex = 3,
+                Parent = ButtonContent,
+            })
+            local Line = Library:MakeLine(Button, {
+                AnchorPoint = Vector2.new(0, 1),
+                Position = UDim2.new(0, 0, 1, 1),
+                Size = UDim2.new(1, 0, 0, 1),
+            })
+
+            local Canvas = New("CanvasGroup", {
+                BackgroundTransparency = 1,
+                ClipsDescendants = true,
+                GroupTransparency = 0,
+                Size = UDim2.fromScale(1, 1),
+                Visible = false,
+                Parent = TabContainer,
+            })
+
+            local function CreateSide(IsRight: boolean)
+                local Side = New("ScrollingFrame", {
+                    AnchorPoint = IsRight and Vector2.new(1, 0) or Vector2.zero,
+                    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+                    BackgroundTransparency = 1,
+                    CanvasSize = UDim2.fromScale(0, 0),
+                    Position = IsRight and UDim2.fromScale(1, 0) or UDim2.fromScale(0, 0),
+                    ScrollBarImageTransparency = 1,
+                    ScrollBarThickness = 0,
+                    Size = UDim2.new(0.5, -3, 1, 0),
+                    Parent = Canvas,
+                })
+                New("UIListLayout", {
+                    Padding = UDim.new(0, 2),
+                    Parent = Side,
+                })
+                New("UIPadding", {
+                    PaddingBottom = UDim.new(0, 2),
+                    PaddingLeft = UDim.new(0, 2),
+                    PaddingRight = UDim.new(0, 2),
+                    PaddingTop = UDim.new(0, 2),
+                    Parent = Side,
+                })
+                New("Frame", {
+                    BackgroundTransparency = 1,
+                    LayoutOrder = -1,
+                    Parent = Side,
+                })
+                New("Frame", {
+                    BackgroundTransparency = 1,
+                    LayoutOrder = 1,
+                    Parent = Side,
+                })
+
+                return Side
+            end
+
+            local SubTab = {
+                Type = "SubTab",
+                Name = SubTabName,
+                StorageIndex = StorageIndex,
+                Connections = {},
+                Destroyed = false,
+                Visible = true,
+                Button = Button,
+                ButtonCorner = ButtonCorner,
+                Canvas = Canvas,
+                Groupboxes = {},
+                Tabboxes = {},
+                Tab = Tab,
+                Sides = {
+                    CreateSide(false),
+                    CreateSide(true),
+                },
+            }
+
+            function SubTab:UpdateCorners(FirstSubTab, LastSubTab)
+                setthreadidentity(8)
+                local Radius = WindowInfo.CornerRadius
+
+                if not FirstSubTab and not LastSubTab then
+                    FirstSubTab, LastSubTab = GetVisibleSubTabBoundaries()
+                end
+
+                ButtonCorner.TopLeftRadius = UDim.new(0, SubTab == FirstSubTab and Radius or 0)
+                ButtonCorner.BottomLeftRadius = UDim.new(0, SubTab == FirstSubTab and Radius or 0)
+                ButtonCorner.TopRightRadius = UDim.new(0, SubTab == LastSubTab and Radius or 0)
+                ButtonCorner.BottomRightRadius = UDim.new(0, SubTab == LastSubTab and Radius or 0)
+            end
+
+            function SubTab:Show()
+                setthreadidentity(8)
+                if SubTab.Destroyed or not SubTab.Visible or Tab.ActiveSubTab == SubTab then
+                    return
+                end
+                if Tab.ActiveSubTab then
+                    Tab.ActiveSubTab:Hide()
+                end
+
+                Button.BackgroundTransparency = 1
+                ButtonLabel.TextTransparency = 0
+                if ButtonIcon then
+                    ButtonIcon.ImageTransparency = 0
+                end
+                Line.Visible = false
+
+                Tab.Sides = SubTab.Sides
+                Tab.ActiveSubTab = SubTab
+                Library:PlayTabAnimation(Canvas, true)
+                Tab:RefreshSides()
+
+                if Library.Searching then
+                    Library:UpdateSearch(Library.SearchText)
+                end
+            end
+
+            function SubTab:Hide()
+                setthreadidentity(8)
+                if SubTab.Destroyed then
+                    return
+                end
+
+                Button.BackgroundTransparency = 0
+                ButtonLabel.TextTransparency = 0.5
+                if ButtonIcon then
+                    ButtonIcon.ImageTransparency = 0.5
+                end
+                Line.Visible = true
+                Library:PlayTabAnimation(Canvas, false)
+
+                if Tab.ActiveSubTab == SubTab then
+                    Tab.ActiveSubTab = nil
+                end
+            end
+
+            function SubTab:SetVisible(Visible: boolean)
+                setthreadidentity(8)
+                SubTab.Visible = Visible
+                Button.Visible = Visible
+
+                if not Visible and Tab.ActiveSubTab == SubTab then
+                    SubTab:Hide()
+                end
+                Tab:RefreshSubTabs()
+            end
+
+            function SubTab:AddGroupbox(Info)
+                setthreadidentity(8)
+                Info = table.clone(Info)
+                Info.SubTab = SubTab
+                Info.Parent = Info.Side == 1 and SubTab.Sides[1] or SubTab.Sides[2]
+                Info.StorageName = `{StorageIndex}:{#SubTab.Groupboxes + 1}:{Info.Name}`
+
+                return Tab:AddGroupbox(Info)
+            end
+
+            function SubTab:AddLeftGroupbox(Name, IconName, Visible, Collapsed, DisableCollapsing)
+                setthreadidentity(8)
+                return SubTab:AddGroupbox({ Side = 1, Name = Name, IconName = IconName, Visible = Visible, Collapsed = Collapsed, DisableCollapsing = DisableCollapsing })
+            end
+
+            function SubTab:AddRightGroupbox(Name, IconName, Visible, Collapsed, DisableCollapsing)
+                setthreadidentity(8)
+                return SubTab:AddGroupbox({ Side = 2, Name = Name, IconName = IconName, Visible = Visible, Collapsed = Collapsed, DisableCollapsing = DisableCollapsing })
+            end
+
+            function SubTab:AddTabbox(Info)
+                setthreadidentity(8)
+                Info = table.clone(Info)
+                Info.SubTab = SubTab
+                Info.Parent = Info.Side == 1 and SubTab.Sides[1] or SubTab.Sides[2]
+                Info.StorageName = `{StorageIndex}:Tabbox:{#SubTab.Tabboxes + 1}:{tostring(Info.Name)}`
+
+                return Tab:AddTabbox(Info)
+            end
+
+            function SubTab:AddLeftTabbox(Name)
+                setthreadidentity(8)
+                return SubTab:AddTabbox({ Side = 1, Name = Name })
+            end
+
+            function SubTab:AddRightTabbox(Name)
+                setthreadidentity(8)
+                return SubTab:AddTabbox({ Side = 2, Name = Name })
+            end
+
+            function SubTab:Destroy()
+                setthreadidentity(8)
+                if SubTab.Destroyed then
+                    return
+                end
+
+                SubTab.Destroyed = true
+
+                for _, Connection in SubTab.Connections do
+                    Connection:Disconnect()
+                end
+                table.clear(SubTab.Connections)
+
+                for _, Tabbox in SubTab.Tabboxes do
+                    for TabboxIndex, StoredTabbox in Tab.Tabboxes do
+                        if StoredTabbox == Tabbox then
+                            Tab.Tabboxes[TabboxIndex] = nil
+                            break
+                        end
+                    end
+                    Tabbox:Destroy()
+                end
+                table.clear(SubTab.Tabboxes)
+
+                for _, Groupbox in SubTab.Groupboxes do
+                    for GroupboxIndex, StoredGroupbox in Tab.Groupboxes do
+                        if StoredGroupbox == Groupbox then
+                            Tab.Groupboxes[GroupboxIndex] = nil
+                            break
+                        end
+                    end
+                    Groupbox:Destroy()
+                end
+                table.clear(SubTab.Groupboxes)
+
+                local OrderIndex = table.find(Tab.SubTabOrder, SubTab)
+                if OrderIndex then
+                    table.remove(Tab.SubTabOrder, OrderIndex)
+                end
+                Tab.SubTabs[StorageIndex] = nil
+
+                if Tab.ActiveSubTab == SubTab then
+                    Tab.ActiveSubTab = nil
+                end
+
+                local CornerIndex = table.find(Library.SpecificCorners, ButtonCorner)
+                if CornerIndex then
+                    table.remove(Library.SpecificCorners, CornerIndex)
+                end
+                Canvas:Destroy()
+                Button:Destroy()
+                Tab:RefreshSubTabs()
+            end
+
+            table.insert(SubTab.Connections, Button.MouseEnter:Connect(function()
+                setthreadidentity(8)
+                if Tab.ActiveSubTab ~= SubTab then
+                    TweenService:Create(ButtonLabel, Library.TweenInfo, { TextTransparency = 0.25 }):Play()
+                    if ButtonIcon then
+                        TweenService:Create(ButtonIcon, Library.TweenInfo, { ImageTransparency = 0.25 }):Play()
+                    end
+                end
+            end))
+            table.insert(SubTab.Connections, Button.MouseLeave:Connect(function()
+                setthreadidentity(8)
+                if Tab.ActiveSubTab ~= SubTab then
+                    TweenService:Create(ButtonLabel, Library.TweenInfo, { TextTransparency = 0.5 }):Play()
+                    if ButtonIcon then
+                        TweenService:Create(ButtonIcon, Library.TweenInfo, { ImageTransparency = 0.5 }):Play()
+                    end
+                end
+            end))
+            table.insert(SubTab.Connections, Button.MouseButton1Click:Connect(SubTab.Show))
+
+            Tab.SubTabs[StorageIndex] = SubTab
+            table.insert(Tab.SubTabOrder, SubTab)
+            Tab:RefreshSubTabs()
+
+            return SubTab, StorageIndex
+        end
+
         local function AddTabbox(self, Info)
             setthreadidentity(8)
             local ParentObj = self
+            local OwningSubTab = Info.SubTab or ParentObj.SubTab
 
             local BoxHolder = New("Frame", {
                 AutomaticSize = Enum.AutomaticSize.Y,
                 BackgroundTransparency = 1,
                 Size = UDim2.fromScale(1, 0),
-                Parent = if ParentObj.Type == "Groupbox" then ParentObj.Container else (Info.Side == 1 and TabLeft or TabRight),
+                Parent = if ParentObj.Type == "Groupbox" then ParentObj.Container else (Info.Parent or (Info.Side == 1 and TabLeft or TabRight)),
             })
             New("UIListLayout", {
                 Padding = UDim.new(0, 6),
@@ -11536,6 +11987,7 @@ function Library:CreateWindow(WindowInfo)
                     ButtonCorner = ButtonCorner,
 
                     Tab = Tab,
+                    SubTab = OwningSubTab,
                     Elements = {},
                     DependencyBoxes = {},
                 }
@@ -11647,6 +12099,9 @@ function Library:CreateWindow(WindowInfo)
 
             function Tabbox:Destroy()
                 setthreadidentity(8)
+                if Tabbox.Destroyed then
+                    return
+                end
                 Tabbox.Destroyed = true
 
                 if Tabbox.Connections then
@@ -11670,10 +12125,13 @@ function Library:CreateWindow(WindowInfo)
                 end
             end
 
-            if Info.Name then
-                Tab.Tabboxes[Info.Name] = Tabbox
+            if Info.StorageName or Info.Name then
+                Tab.Tabboxes[Info.StorageName or Info.Name] = Tabbox
             else
                 table.insert(Tab.Tabboxes, Tabbox)
+            end
+            if OwningSubTab then
+                table.insert(OwningSubTab.Tabboxes, Tabbox)
             end
 
             return Tabbox
@@ -11697,7 +12155,7 @@ function Library:CreateWindow(WindowInfo)
                 AutomaticSize = Enum.AutomaticSize.Y,
                 BackgroundTransparency = 1,
                 Size = UDim2.fromScale(1, 0),
-                Parent = Info.Side == 1 and TabLeft or TabRight,
+                Parent = Info.Parent or (Info.Side == 1 and TabLeft or TabRight),
             })
             New("UIListLayout", {
                 Padding = UDim.new(0, 6),
@@ -11815,6 +12273,7 @@ function Library:CreateWindow(WindowInfo)
                 Container = GroupboxContainer,
 
                 Tab = Tab,
+                SubTab = Info.SubTab,
                 DependencyBoxes = {},
                 Elements = {}
             }
@@ -11973,7 +12432,10 @@ function Library:CreateWindow(WindowInfo)
             setmetatable(Groupbox, BaseGroupbox)
 
             Groupbox:Resize()
-            Tab.Groupboxes[Info.Name] = Groupbox
+            Tab.Groupboxes[Info.StorageName or Info.Name] = Groupbox
+            if Info.SubTab then
+                table.insert(Info.SubTab.Groupboxes, Groupbox)
+            end
 
             if Info.Visible == false then
                 Groupbox:Hide()
@@ -12088,6 +12550,11 @@ function Library:CreateWindow(WindowInfo)
             setthreadidentity(8)
             Tab.Destroyed = true
 
+            local HolderCornerIndex = table.find(Library.Corners, SubTabHolderCorner)
+            if HolderCornerIndex then
+                table.remove(Library.Corners, HolderCornerIndex)
+            end
+
             if Tab.Command then
                 Tab.Command:Destroy()
             end
@@ -12097,6 +12564,12 @@ function Library:CreateWindow(WindowInfo)
                     Connection:Disconnect()
                 end
             end
+
+            for Index = #Tab.SubTabOrder, 1, -1 do
+                Tab.SubTabOrder[Index]:Destroy()
+            end
+            table.clear(Tab.SubTabs)
+            table.clear(Tab.SubTabOrder)
 
             for _, Groupbox in Tab.Groupboxes do
                 if Groupbox.Destroy then

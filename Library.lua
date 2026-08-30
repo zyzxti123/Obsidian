@@ -543,6 +543,10 @@ local Templates = {
 
         Multi = false,
         DragSelect = false,
+        SelectionControls = false,
+        Prioritize = false,
+        PriorityButtonsPosition = "Right",
+        AutoSizeDropdown = false,
         MaxVisibleDropdownItems = 8,
 
         Callback = function() end,
@@ -6820,6 +6824,11 @@ do
 
             Multi = Info.Multi,
             DragSelect = Info.Multi and not Library.IsMobile and Info.DragSelect == true,
+            SelectionControls = Info.Multi and Info.SelectionControls == true,
+            Prioritize = Info.Multi and Info.Prioritize == true,
+            PriorityButtonsPosition = Info.PriorityButtonsPosition == "Left" and "Left" or "Right",
+            AutoSizeDropdown = Info.AutoSizeDropdown == true,
+            Priority = {},
 
             SpecialType = Info.SpecialType,
             ExcludeLocalPlayer = Info.ExcludeLocalPlayer,
@@ -6969,16 +6978,69 @@ do
             return ValueImage
         end
 
+        local CachedContentWidth = nil
+
+        local function CalculateMenuWidth()
+            setthreadidentity(8)
+            local width = DisplayContainer.AbsoluteSize.X / Library.DPIScale
+
+            if not Dropdown.AutoSizeDropdown then
+                return width
+            end
+
+            if CachedContentWidth == nil then
+                local isDictionary = not IsSequentialArray(Dropdown.Values)
+                local controlWidth = Dropdown.Prioritize and 46 or 16
+                local contentWidth = 0
+
+                for key, rawValue in Dropdown.Values do
+                    local formattedValue = tostring(Info.FormatListValue and Info.FormatListValue(rawValue) or rawValue)
+                    local textWidth = Library:GetTextBounds(formattedValue, DisplayButton.FontFace, 14)
+                    local value = isDictionary and key or rawValue
+                    local imageWidth = GetValueImage(value, rawValue) and 20 or 0
+
+                    contentWidth = math.max(contentWidth, textWidth + controlWidth + imageWidth)
+                end
+
+                CachedContentWidth = contentWidth
+            end
+
+            width = math.max(width, CachedContentWidth)
+
+            local camera = workspace.CurrentCamera
+            local viewportWidth = camera and camera.ViewportSize.X or DisplayContainer.AbsoluteSize.X
+            local maximumWidth = math.max(
+                DisplayContainer.AbsoluteSize.X / Library.DPIScale,
+                viewportWidth / Library.DPIScale - 16
+            )
+
+            return math.min(width, maximumWidth)
+        end
+
+        local function CalculateMenuOffset()
+            setthreadidentity(8)
+            local menuWidth = CalculateMenuWidth() * Library.DPIScale
+            local camera = workspace.CurrentCamera
+            local viewportWidth = camera and camera.ViewportSize.X or DisplayContainer.AbsolutePosition.X + menuWidth
+            local rightOverflow = DisplayContainer.AbsolutePosition.X + menuWidth - viewportWidth + 8
+
+            if rightOverflow <= 0 then
+                return { 0.5, DisplayContainer.AbsoluteSize.Y + 1.5 }
+            end
+
+            return {
+                math.max(8 - DisplayContainer.AbsolutePosition.X, 0.5 - rightOverflow),
+                DisplayContainer.AbsoluteSize.Y + 1.5,
+            }
+        end
+
         local MenuTable = Library:AddContextMenu(
             DisplayContainer,
             function()
                 setthreadidentity(8)
-                return UDim2.fromOffset((DisplayContainer.AbsoluteSize.X / Library.DPIScale), 0)
+                return UDim2.fromOffset(CalculateMenuWidth(), 0)
             end,
-            function()
-                setthreadidentity(8)
-                return { 0.5, DisplayContainer.AbsoluteSize.Y + 1.5 }
-            end,
+            CalculateMenuOffset,
             2,
             function(Active: boolean)
                 setthreadidentity(8)
@@ -7002,20 +7064,85 @@ do
         Dropdown.Menu = MenuTable
 
         local ItemHeight = 21
+        local HeaderHeight = Dropdown.SelectionControls and 29 or 0
         local PoolSize = math.max(1, Info.MaxVisibleDropdownItems + 2)
         local Pool = {}
         local FilteredEntries = {}
 
+        if Dropdown.SelectionControls then
+            local Header = New("Frame", {
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 0, HeaderHeight),
+                Parent = MenuTable.Menu,
+            })
+
+            local SelectAllButton = New("TextButton", {
+                BackgroundColor3 = "MainColor",
+                Position = UDim2.fromOffset(4, 4),
+                Size = UDim2.new(0.5, -6, 0, 20),
+                Text = "Select All",
+                TextSize = 13,
+                Parent = Header,
+            })
+
+            local UnselectAllButton = New("TextButton", {
+                AnchorPoint = Vector2.new(1, 0),
+                BackgroundColor3 = "MainColor",
+                Position = UDim2.new(1, -4, 0, 4),
+                Size = UDim2.new(0.5, -6, 0, 20),
+                Text = "Unselect All",
+                TextSize = 13,
+                Parent = Header,
+            })
+
+            for _, button in { SelectAllButton, UnselectAllButton } do
+                local corner = New("UICorner", {
+                    CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+                    Parent = button,
+                })
+                table.insert(Library.Corners, corner)
+
+                New("UIStroke", {
+                    Color = "OutlineColor",
+                    Parent = button,
+                })
+            end
+
+            New("Frame", {
+                AnchorPoint = Vector2.new(0, 1),
+                BackgroundColor3 = "OutlineColor",
+                BorderSizePixel = 0,
+                Position = UDim2.fromScale(0, 1),
+                Size = UDim2.new(1, 0, 0, 1),
+                Parent = Header,
+            })
+
+            table.insert(Dropdown.Connections, SelectAllButton.Activated:Connect(function()
+                setthreadidentity(8)
+                local SelectAll = rawget(Dropdown, "SelectAll")
+                if typeof(SelectAll) == "function" then
+                    SelectAll(Dropdown)
+                end
+            end))
+            table.insert(Dropdown.Connections, UnselectAllButton.Activated:Connect(function()
+                setthreadidentity(8)
+                local UnselectAll = rawget(Dropdown, "UnselectAll")
+                if typeof(UnselectAll) == "function" then
+                    UnselectAll(Dropdown)
+                end
+            end))
+        end
+
         function Dropdown:RecalculateListSize(Count)
             setthreadidentity(8)
             local ItemCount = Count or #FilteredEntries
-            local Y = math.clamp(ItemCount * ItemHeight, 0, Info.MaxVisibleDropdownItems * ItemHeight)
+            local Y = HeaderHeight + math.clamp(ItemCount * ItemHeight, 0, Info.MaxVisibleDropdownItems * ItemHeight)
 
-            MenuTable.Menu.CanvasSize = UDim2.fromOffset(0, ItemCount * ItemHeight)
+            MenuTable.Menu.CanvasSize = UDim2.fromOffset(0, HeaderHeight + ItemCount * ItemHeight)
 
             MenuTable:SetSize(function()
                 setthreadidentity(8)
-                return UDim2.fromOffset((DisplayContainer.AbsoluteSize.X / Library.DPIScale), Y)
+                return UDim2.fromOffset(CalculateMenuWidth(), Y)
             end)
         end
 
@@ -7101,8 +7228,16 @@ do
             local Table = {}
 
             if Info.Multi then
-                for Value, _ in Dropdown.Value do
-                    table.insert(Table, Value)
+                if Dropdown.Prioritize then
+                    for _, Value in Dropdown.Priority do
+                        if Dropdown.Value[Value] then
+                            table.insert(Table, Value)
+                        end
+                    end
+                else
+                    for Value in Dropdown.Value do
+                        table.insert(Table, Value)
+                    end
                 end
             else
                 if Dropdown.Value then
@@ -7122,6 +7257,38 @@ do
         local DragInputEndedConn = nil
         local DragInputChangedConn = nil
 
+        local function SynchronizePriority()
+            setthreadidentity(8)
+            if not Dropdown.Prioritize then
+                return
+            end
+
+            local existingValues = {}
+            local isDictionary = not IsSequentialArray(Dropdown.Values)
+
+            for key, rawValue in Dropdown.Values do
+                existingValues[isDictionary and key or rawValue] = true
+            end
+
+            local priority = {}
+            for _, value in Dropdown.Priority do
+                if existingValues[value] then
+                    priority[#priority + 1] = value
+                    existingValues[value] = nil
+                end
+            end
+
+            for key, rawValue in Dropdown.Values do
+                local value = isDictionary and key or rawValue
+                if existingValues[value] then
+                    priority[#priority + 1] = value
+                    existingValues[value] = nil
+                end
+            end
+
+            Dropdown.Priority = priority
+        end
+
         local function RecomputeFilteredEntries()
             setthreadidentity(8)
             local Values = Dropdown.Values
@@ -7130,6 +7297,8 @@ do
 
             local EnabledList, DisabledList = {}, {}
             local Pending = {}
+
+            SynchronizePriority()
 
             for Key, RawValue in Values do
                 local Value = IsDictionary and Key or RawValue
@@ -7161,20 +7330,38 @@ do
                 end)
             end
 
-            for _, Entry in Pending do
-                if Entry.IsDisabled then
-                    table.insert(DisabledList, Entry)
-                else
-                    table.insert(EnabledList, Entry)
+            if Dropdown.Prioritize then
+                local priorityIndexes = {}
+                for index, value in Dropdown.Priority do
+                    priorityIndexes[value] = index
                 end
+
+                table.sort(Pending, function(first, second)
+                    setthreadidentity(8)
+                    return (priorityIndexes[first.Value] or math.huge) < (priorityIndexes[second.Value] or math.huge)
+                end)
             end
 
             table.clear(FilteredEntries)
-            for _, Entry in EnabledList do
-                table.insert(FilteredEntries, Entry)
-            end
-            for _, Entry in DisabledList do
-                table.insert(FilteredEntries, Entry)
+            if Dropdown.Prioritize then
+                for _, Entry in Pending do
+                    table.insert(FilteredEntries, Entry)
+                end
+            else
+                for _, Entry in Pending do
+                    if Entry.IsDisabled then
+                        table.insert(DisabledList, Entry)
+                    else
+                        table.insert(EnabledList, Entry)
+                    end
+                end
+
+                for _, Entry in EnabledList do
+                    table.insert(FilteredEntries, Entry)
+                end
+                for _, Entry in DisabledList do
+                    table.insert(FilteredEntries, Entry)
+                end
             end
         end
 
@@ -7186,7 +7373,7 @@ do
             end
 
             local MaxFirst = Total - PoolSize + 1
-            local ScrollY = MenuTable.Menu.CanvasPosition.Y / Library.DPIScale
+            local ScrollY = math.max(0, MenuTable.Menu.CanvasPosition.Y / Library.DPIScale - HeaderHeight)
             local Index = math.floor(ScrollY / ItemHeight) + 1
             return math.clamp(Index, 1, MaxFirst)
         end
@@ -7209,7 +7396,7 @@ do
                 end
 
                 Row.Container.Visible = true
-                Row.Container.Position = UDim2.fromOffset(0, (DataIndex - 1) * ItemHeight)
+                Row.Container.Position = UDim2.fromOffset(0, HeaderHeight + (DataIndex - 1) * ItemHeight)
 
                 local IsLast = DataIndex == Total
                 Row.Corner.BottomRightRadius = IsLast and UDim.new(0, Library.CornerRadius / 2) or UDim.new(0, 0)
@@ -7217,18 +7404,27 @@ do
 
                 Row.Button.Text = Entry.FormattedValue
 
+                local priorityWidth = Dropdown.Prioritize and 40 or 0
+                local priorityOnLeft = Dropdown.Prioritize and Dropdown.PriorityButtonsPosition == "Left"
+
                 if Entry.ValueImage then
                     Row.Image.Visible = true
                     Row.Image.Image = Entry.ValueImage.Url
                     Row.Image.ImageRectOffset = Entry.ValueImage.ImageRectOffset or Vector2.zero
                     Row.Image.ImageRectSize = Entry.ValueImage.ImageRectSize or Vector2.zero
-                    Row.Button.Size = UDim2.new(1, -18, 0, ItemHeight)
-                    Row.Button.Position = UDim2.fromOffset(18, 0)
+                    Row.Image.Position = UDim2.fromOffset(priorityOnLeft and 44 or 4, 3)
+                    Row.Button.Size = UDim2.new(1, -18 - priorityWidth, 0, ItemHeight)
+                    Row.Button.Position = UDim2.fromOffset(18 + (priorityOnLeft and 40 or 0), 0)
                 else
                     Row.Image.Visible = false
-                    Row.Button.Size = UDim2.new(1, 0, 0, ItemHeight)
-                    Row.Button.Position = UDim2.fromOffset(0, 0)
+                    Row.Button.Size = UDim2.new(1, -priorityWidth, 0, ItemHeight)
+                    Row.Button.Position = UDim2.fromOffset(priorityOnLeft and 40 or 0, 0)
                 end
+
+                Row.UpButton.Visible = Dropdown.Prioritize
+                Row.DownButton.Visible = Dropdown.Prioritize
+                Row.UpButton.Position = priorityOnLeft and UDim2.fromOffset(2, 2) or UDim2.new(1, -40, 0, 2)
+                Row.DownButton.Position = priorityOnLeft and UDim2.fromOffset(21, 2) or UDim2.new(1, -21, 0, 2)
 
                 Row:UpdateButton()
             end
@@ -7239,6 +7435,68 @@ do
             Library:SafeCallback(Dropdown.Callback, Dropdown.Value)
             Library:SafeCallback(Dropdown.Changed, Dropdown.Value)
         end      
+
+        function Dropdown:MovePriority(Value, Direction)
+            setthreadidentity(8)
+            if not Dropdown.Prioritize or Direction == 0 then
+                return false
+            end
+
+            SynchronizePriority()
+
+            local currentIndex = table.find(Dropdown.Priority, Value)
+            if not currentIndex then
+                return false
+            end
+
+            local targetIndex = math.clamp(currentIndex + (Direction < 0 and -1 or 1), 1, #Dropdown.Priority)
+            if currentIndex == targetIndex then
+                return false
+            end
+
+            Dropdown.Priority[currentIndex], Dropdown.Priority[targetIndex] = Dropdown.Priority[targetIndex], Dropdown.Priority[currentIndex]
+            Dropdown:BuildDropdownList()
+            Dropdown:RunChanged()
+
+            return true
+        end
+
+        function Dropdown:SelectAll()
+            setthreadidentity(8)
+            if not Info.Multi then
+                return
+            end
+
+            local isDictionary = not IsSequentialArray(Dropdown.Values)
+            for key, rawValue in Dropdown.Values do
+                local value = isDictionary and key or rawValue
+                local isDisabled = table.find(Dropdown.DisabledValues, value) ~= nil
+                    or (rawValue ~= value and table.find(Dropdown.DisabledValues, rawValue) ~= nil)
+
+                if not isDisabled then
+                    Dropdown.Value[value] = true
+                end
+            end
+
+            Dropdown:Display()
+            Dropdown:RefreshPool()
+            Library:UpdateDependencyBoxes()
+            Dropdown:RunChanged()
+        end
+
+        function Dropdown:UnselectAll()
+            setthreadidentity(8)
+            if not Info.Multi then
+                return
+            end
+
+            table.clear(Dropdown.Value)
+
+            Dropdown:Display()
+            Dropdown:RefreshPool()
+            Library:UpdateDependencyBoxes()
+            Dropdown:RunChanged()
+        end
 
         local function StopDragSelect()
             setthreadidentity(8)
@@ -7380,10 +7638,37 @@ do
                 Parent = Button,
             })
 
+            local UpButton = New("ImageButton", {
+                BackgroundTransparency = 1,
+                Image = ArrowIcon and ArrowIcon.Url or "",
+                ImageColor3 = "FontColor",
+                ImageRectOffset = ArrowIcon and ArrowIcon.ImageRectOffset or Vector2.zero,
+                ImageRectSize = ArrowIcon and ArrowIcon.ImageRectSize or Vector2.zero,
+                Size = UDim2.fromOffset(17, 17),
+                Visible = false,
+                ZIndex = 2,
+                Parent = Container,
+            })
+
+            local DownButton = New("ImageButton", {
+                BackgroundTransparency = 1,
+                Image = ArrowIcon and ArrowIcon.Url or "",
+                ImageColor3 = "FontColor",
+                ImageRectOffset = ArrowIcon and ArrowIcon.ImageRectOffset or Vector2.zero,
+                ImageRectSize = ArrowIcon and ArrowIcon.ImageRectSize or Vector2.zero,
+                Rotation = 180,
+                Size = UDim2.fromOffset(17, 17),
+                Visible = false,
+                ZIndex = 2,
+                Parent = Container,
+            })
+
             Row.Container = Container
             Row.Corner = Corner
             Row.Image = Image
             Row.Button = Button
+            Row.UpButton = UpButton
+            Row.DownButton = DownButton
 
             function Row:UpdateButton()
                 setthreadidentity(8)
@@ -7405,7 +7690,27 @@ do
                 if Entry.ValueImage then
                     Image.ImageTransparency = Entry.IsDisabled and 0.8 or Selected and 0 or 0.5
                 end
+
+                if Dropdown.Prioritize then
+                    local priorityIndex = table.find(Dropdown.Priority, Entry.Value)
+                    UpButton.ImageTransparency = priorityIndex == 1 and 0.8 or 0.35
+                    DownButton.ImageTransparency = priorityIndex == #Dropdown.Priority and 0.8 or 0.35
+                end
             end
+
+            table.insert(Dropdown.Connections, UpButton.Activated:Connect(function()
+                setthreadidentity(8)
+                if Row.Entry then
+                    Dropdown:MovePriority(Row.Entry.Value, -1)
+                end
+            end))
+
+            table.insert(Dropdown.Connections, DownButton.Activated:Connect(function()
+                setthreadidentity(8)
+                if Row.Entry then
+                    Dropdown:MovePriority(Row.Entry.Value, 1)
+                end
+            end))
 
             Button.MouseButton1Click:Connect(function()
                 setthreadidentity(8)
@@ -7545,16 +7850,42 @@ do
             setthreadidentity(8)
             if Info.Multi then
                 local Table = {}
+                local SelectedOrder = {}
 				
                 for Val, Active in Value or {} do
                     if typeof(Active) ~= "boolean" then
-                        Table[Active] = true
+                        if ValueExists(Active) then
+                            Table[Active] = true
+                            table.insert(SelectedOrder, Active)
+                        end
                     elseif Active and ValueExists(Val) then
                         Table[Val] = true
+                        table.insert(SelectedOrder, Val)
                     end
                 end
 
                 Dropdown.Value = Table
+
+                if Dropdown.Prioritize and #SelectedOrder > 0 then
+                    local selectedSet = {}
+                    local Priority = {}
+
+                    for _, Val in SelectedOrder do
+                        if not selectedSet[Val] then
+                            table.insert(Priority, Val)
+                            selectedSet[Val] = true
+                        end
+                    end
+                    for _, Val in Dropdown.Priority do
+                        if not selectedSet[Val] then
+                            table.insert(Priority, Val)
+                            selectedSet[Val] = true
+                        end
+                    end
+
+                    Dropdown.Priority = Priority
+                    SynchronizePriority()
+                end
             else
                 if ValueExists(Value) then
                     Dropdown.Value = Value
@@ -7577,6 +7908,7 @@ do
         function Dropdown:SetValues(Values)
             setthreadidentity(8)
             Dropdown.Values = Values
+            CachedContentWidth = nil
 
             local Changed = false
             if Info.Multi then
@@ -7599,6 +7931,96 @@ do
                 Library:UpdateDependencyBoxes()
                 Dropdown:RunChanged()
             end
+        end
+
+        function Dropdown:SetPriority(Values)
+            setthreadidentity(8)
+            if not Dropdown.Prioritize or typeof(Values) ~= "table" then
+                return
+            end
+
+            local Priority = {}
+            local Added = {}
+
+            for _, Value in Values do
+                if ValueExists(Value) and not Added[Value] then
+                    table.insert(Priority, Value)
+                    Added[Value] = true
+                end
+            end
+            for _, Value in Dropdown.Priority do
+                if ValueExists(Value) and not Added[Value] then
+                    table.insert(Priority, Value)
+                    Added[Value] = true
+                end
+            end
+
+            Dropdown.Priority = Priority
+            Dropdown:BuildDropdownList()
+            Dropdown:RunChanged()
+        end
+
+        function Dropdown:UpdateKeys(Renames)
+            setthreadidentity(8)
+            if typeof(Renames) ~= "table" then
+                return false
+            end
+
+            local Changed = false
+            if IsSequentialArray(Dropdown.Values) then
+                for Index, OldValue in Dropdown.Values do
+                    local NewValue = Renames[OldValue]
+                    if NewValue ~= nil and NewValue ~= OldValue then
+                        Dropdown.Values[Index] = NewValue
+                        Changed = true
+                    end
+                end
+            else
+                for OldValue, NewValue in Renames do
+                    if NewValue ~= nil and NewValue ~= OldValue and Dropdown.Values[OldValue] ~= nil then
+                        Dropdown.Values[NewValue] = Dropdown.Values[OldValue]
+                        Dropdown.Values[OldValue] = nil
+                        Changed = true
+                    end
+                end
+            end
+
+            if not Changed then
+                return false
+            end
+
+            if Info.Multi then
+                for OldValue, NewValue in Renames do
+                    if Dropdown.Value[OldValue] then
+                        Dropdown.Value[OldValue] = nil
+                        Dropdown.Value[NewValue] = true
+                    end
+                end
+            elseif Dropdown.Value ~= nil and Renames[Dropdown.Value] ~= nil then
+                Dropdown.Value = Renames[Dropdown.Value]
+            end
+
+            for PriorityIndex, OldValue in Dropdown.Priority do
+                local NewValue = Renames[OldValue]
+                if NewValue ~= nil then
+                    Dropdown.Priority[PriorityIndex] = NewValue
+                end
+            end
+
+            CachedContentWidth = nil
+            Dropdown:BuildDropdownList()
+            Dropdown:Display()
+
+            return true
+        end
+
+        function Dropdown:UpdateKey(OldValue, NewValue)
+            setthreadidentity(8)
+            if OldValue == nil or NewValue == nil then
+                return false
+            end
+
+            return Dropdown:UpdateKeys({ [OldValue] = NewValue })
         end
 
         function Dropdown:AddValues(Values)
@@ -7632,6 +8054,7 @@ do
                 end
             end
 
+            CachedContentWidth = nil
             Dropdown:BuildDropdownList()
         end
 
@@ -7663,6 +8086,7 @@ do
             end
             
             Dropdown.ValueImages = ValueImages
+            CachedContentWidth = nil
             Dropdown:BuildDropdownList()
         end
 
@@ -7675,7 +8099,8 @@ do
             for key, val in ValueImages do
                 Dropdown.ValueImages[key] = val
             end
-            
+
+            CachedContentWidth = nil
             Dropdown:BuildDropdownList()
         end
 

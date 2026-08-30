@@ -7405,11 +7405,14 @@ do
 
                 if not Entry then
                     Row.Container.Visible = false
+                    Row.UpButton.Visible = false
+                    Row.DownButton.Visible = false
                     continue
                 end
 
                 Row.Container.Visible = true
-                Row.Container.Position = UDim2.fromOffset(0, HeaderHeight + (DataIndex - 1) * ItemHeight)
+                local rowY = HeaderHeight + (DataIndex - 1) * ItemHeight
+                Row.Container.Position = UDim2.fromOffset(0, rowY)
 
                 local IsLast = DataIndex == Total
                 Row.Corner.BottomRightRadius = IsLast and UDim.new(0, Library.CornerRadius / 2) or UDim.new(0, 0)
@@ -7437,8 +7440,8 @@ do
 
                 Row.UpButton.Visible = priorityEnabled
                 Row.DownButton.Visible = priorityEnabled
-                Row.UpButton.Position = priorityOnLeft and UDim2.fromOffset(2, 2) or UDim2.new(1, -40, 0, 2)
-                Row.DownButton.Position = priorityOnLeft and UDim2.fromOffset(21, 2) or UDim2.new(1, -21, 0, 2)
+                Row.UpButton.Position = priorityOnLeft and UDim2.fromOffset(2, rowY + 2) or UDim2.new(1, -40, 0, rowY + 2)
+                Row.DownButton.Position = priorityOnLeft and UDim2.fromOffset(21, rowY + 2) or UDim2.new(1, -21, 0, rowY + 2)
 
                 Row:UpdateButton()
             end
@@ -7655,48 +7658,30 @@ do
 
             local UpIcon = Library:GetIcon("arrow-up") or PriorityUpIcon
             local DownIcon = Library:GetIcon("arrow-down") or PriorityDownIcon
-            local PriorityButtonZIndex = MenuTable.Menu.ZIndex + 2
+            local PriorityButtonZIndex = MenuTable.Menu.ZIndex + 20
 
-            local UpButton = New("TextButton", {
-                BackgroundTransparency = 1,
-                Size = UDim2.fromOffset(17, 17),
-                Text = "↑",
-                TextSize = 14,
-                Visible = false,
-                ZIndex = PriorityButtonZIndex,
-                Parent = Container,
-            })
-
-            local UpImage = New("ImageLabel", {
+            local UpButton = New("ImageButton", {
                 BackgroundTransparency = 1,
                 Image = UpIcon and UpIcon.Url or "",
                 ImageColor3 = "FontColor",
                 ImageRectOffset = UpIcon and UpIcon.ImageRectOffset or Vector2.zero,
                 ImageRectSize = UpIcon and UpIcon.ImageRectSize or Vector2.zero,
-                Size = UDim2.fromScale(1, 1),
-                ZIndex = PriorityButtonZIndex + 1,
-                Parent = UpButton,
-            })
-
-            local DownButton = New("TextButton", {
-                BackgroundTransparency = 1,
                 Size = UDim2.fromOffset(17, 17),
-                Text = "↓",
-                TextSize = 14,
                 Visible = false,
                 ZIndex = PriorityButtonZIndex,
-                Parent = Container,
+                Parent = MenuTable.Menu,
             })
 
-            local DownImage = New("ImageLabel", {
+            local DownButton = New("ImageButton", {
                 BackgroundTransparency = 1,
                 Image = DownIcon and DownIcon.Url or "",
                 ImageColor3 = "FontColor",
                 ImageRectOffset = DownIcon and DownIcon.ImageRectOffset or Vector2.zero,
                 ImageRectSize = DownIcon and DownIcon.ImageRectSize or Vector2.zero,
-                Size = UDim2.fromScale(1, 1),
-                ZIndex = PriorityButtonZIndex + 1,
-                Parent = DownButton,
+                Size = UDim2.fromOffset(17, 17),
+                Visible = false,
+                ZIndex = PriorityButtonZIndex,
+                Parent = MenuTable.Menu,
             })
 
             Row.Container = Container
@@ -7705,8 +7690,6 @@ do
             Row.Button = Button
             Row.UpButton = UpButton
             Row.DownButton = DownButton
-            Row.UpImage = UpImage
-            Row.DownImage = DownImage
 
             function Row:UpdateButton()
                 setthreadidentity(8)
@@ -7734,10 +7717,8 @@ do
                     local upTransparency = priorityIndex == 1 and 0.8 or 0.2
                     local downTransparency = priorityIndex == #Dropdown.Priority and 0.8 or 0.2
 
-                    UpImage.ImageTransparency = upTransparency
-                    DownImage.ImageTransparency = downTransparency
-                    UpButton.TextTransparency = upTransparency
-                    DownButton.TextTransparency = downTransparency
+                    UpButton.ImageTransparency = upTransparency
+                    DownButton.ImageTransparency = downTransparency
                 end
             end
 

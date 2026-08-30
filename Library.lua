@@ -547,6 +547,7 @@ local Templates = {
         Prioritize = false,
         PriorityButtonsPosition = "Right",
         AutoSizeDropdown = false,
+        MaxDropdownWidth = 440,
         MaxVisibleDropdownItems = 8,
 
         Callback = function() end,
@@ -3238,6 +3239,8 @@ end
 
 local CheckIcon = Library:GetIcon("check")
 local ArrowIcon = Library:GetIcon("chevron-up")
+local PriorityUpIcon = Library:GetIcon("arrow-up")
+local PriorityDownIcon = Library:GetIcon("arrow-down")
 local ResizeIcon = Library:GetIcon("move-diagonal-2")
 local KeyIcon = Library:GetIcon("key")
 local MoveIcon = Library:GetIcon("move")
@@ -3250,6 +3253,8 @@ function Library:SetIconModule(module: IconModule)
     -- Top ten fixes 🚀
     CheckIcon = Library:GetIcon("check")
     ArrowIcon = Library:GetIcon("chevron-up")
+    PriorityUpIcon = Library:GetIcon("arrow-up")
+    PriorityDownIcon = Library:GetIcon("arrow-down")
     ResizeIcon = Library:GetIcon("move-diagonal-2")
     KeyIcon = Library:GetIcon("key")
     MoveIcon = Library:GetIcon("move")
@@ -6828,6 +6833,7 @@ do
             Prioritize = Info.Multi and Info.Prioritize == true,
             PriorityButtonsPosition = Info.PriorityButtonsPosition == "Left" and "Left" or "Right",
             AutoSizeDropdown = Info.AutoSizeDropdown == true,
+            MaxDropdownWidth = Info.MaxDropdownWidth,
             Priority = {},
 
             SpecialType = Info.SpecialType,
@@ -7011,7 +7017,7 @@ do
             local viewportWidth = camera and camera.ViewportSize.X or DisplayContainer.AbsoluteSize.X
             local maximumWidth = math.max(
                 DisplayContainer.AbsoluteSize.X / Library.DPIScale,
-                viewportWidth / Library.DPIScale - 16
+                math.min(viewportWidth / Library.DPIScale - 16, Dropdown.MaxDropdownWidth)
             )
 
             return math.min(width, maximumWidth)
@@ -7019,18 +7025,24 @@ do
 
         local function CalculateMenuOffset()
             setthreadidentity(8)
-            local menuWidth = CalculateMenuWidth() * Library.DPIScale
-            local camera = workspace.CurrentCamera
-            local viewportWidth = camera and camera.ViewportSize.X or DisplayContainer.AbsolutePosition.X + menuWidth
-            local rightOverflow = DisplayContainer.AbsolutePosition.X + menuWidth - viewportWidth + 8
-
-            if rightOverflow <= 0 then
+            if not Dropdown.AutoSizeDropdown then
                 return { 0.5, DisplayContainer.AbsoluteSize.Y + 1.5 }
             end
 
+            local menuWidth = CalculateMenuWidth() * Library.DPIScale
+            local camera = workspace.CurrentCamera
+            local viewportWidth = camera and camera.ViewportSize.X or DisplayContainer.AbsolutePosition.X + menuWidth
+            local centeredPosition = DisplayContainer.AbsolutePosition.X
+                + (DisplayContainer.AbsoluteSize.X - menuWidth) / 2
+            local clampedPosition = math.clamp(
+                centeredPosition,
+                8,
+                math.max(8, viewportWidth - menuWidth - 8)
+            )
+
             return {
-                math.max(8 - DisplayContainer.AbsolutePosition.X, 0.5 - rightOverflow),
-                DisplayContainer.AbsoluteSize.Y + 1.5,
+                clampedPosition - DisplayContainer.AbsolutePosition.X,
+                DisplayContainer.AbsoluteSize.Y + 4,
             }
         end
 
@@ -7054,11 +7066,12 @@ do
                     SearchBox.Visible = Active
                 end
 
-                DropdownCorner.BottomRightRadius = Active and UDim.new(0, 0) or UDim.new(0, Library.CornerRadius / 2)
-                DropdownCorner.BottomLeftRadius = Active and UDim.new(0, 0) or UDim.new(0, Library.CornerRadius / 2)
+                local joinedToPopup = Active and not Dropdown.AutoSizeDropdown
+                DropdownCorner.BottomRightRadius = joinedToPopup and UDim.new(0, 0) or UDim.new(0, Library.CornerRadius / 2)
+                DropdownCorner.BottomLeftRadius = joinedToPopup and UDim.new(0, 0) or UDim.new(0, Library.CornerRadius / 2)
             end,
             false,
-            "bottom",
+            Dropdown.AutoSizeDropdown and nil or "bottom",
             "Dropdown"
         )
         Dropdown.Menu = MenuTable
@@ -7081,7 +7094,7 @@ do
                 Position = UDim2.fromOffset(4, 4),
                 Size = UDim2.new(0.5, -6, 0, 20),
                 Text = "Select All",
-                TextSize = 13,
+                TextSize = 12,
                 Parent = Header,
             })
 
@@ -7091,7 +7104,7 @@ do
                 Position = UDim2.new(1, -4, 0, 4),
                 Size = UDim2.new(0.5, -6, 0, 20),
                 Text = "Unselect All",
-                TextSize = 13,
+                TextSize = 12,
                 Parent = Header,
             })
 
@@ -7627,7 +7640,8 @@ do
                 BackgroundTransparency = 1,
                 Size = UDim2.new(1, 0, 0, ItemHeight),
                 Text = "",
-                TextSize = 14,
+                TextSize = Dropdown.AutoSizeDropdown and 13 or 14,
+                TextTruncate = Enum.TextTruncate.AtEnd,
                 TextTransparency = 0.5,
                 TextXAlignment = Enum.TextXAlignment.Left,
                 Parent = Container,
@@ -7640,10 +7654,10 @@ do
 
             local UpButton = New("ImageButton", {
                 BackgroundTransparency = 1,
-                Image = ArrowIcon and ArrowIcon.Url or "",
+                Image = PriorityUpIcon and PriorityUpIcon.Url or "",
                 ImageColor3 = "FontColor",
-                ImageRectOffset = ArrowIcon and ArrowIcon.ImageRectOffset or Vector2.zero,
-                ImageRectSize = ArrowIcon and ArrowIcon.ImageRectSize or Vector2.zero,
+                ImageRectOffset = PriorityUpIcon and PriorityUpIcon.ImageRectOffset or Vector2.zero,
+                ImageRectSize = PriorityUpIcon and PriorityUpIcon.ImageRectSize or Vector2.zero,
                 Size = UDim2.fromOffset(17, 17),
                 Visible = false,
                 ZIndex = 2,
@@ -7652,11 +7666,10 @@ do
 
             local DownButton = New("ImageButton", {
                 BackgroundTransparency = 1,
-                Image = ArrowIcon and ArrowIcon.Url or "",
+                Image = PriorityDownIcon and PriorityDownIcon.Url or "",
                 ImageColor3 = "FontColor",
-                ImageRectOffset = ArrowIcon and ArrowIcon.ImageRectOffset or Vector2.zero,
-                ImageRectSize = ArrowIcon and ArrowIcon.ImageRectSize or Vector2.zero,
-                Rotation = 180,
+                ImageRectOffset = PriorityDownIcon and PriorityDownIcon.ImageRectOffset or Vector2.zero,
+                ImageRectSize = PriorityDownIcon and PriorityDownIcon.ImageRectSize or Vector2.zero,
                 Size = UDim2.fromOffset(17, 17),
                 Visible = false,
                 ZIndex = 2,

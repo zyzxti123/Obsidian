@@ -178,6 +178,20 @@ local Library = {
     ScreenGui = nil,
     Window = nil,
     WindowContainer = nil,
+    KeyStatusComponents = {},
+    AnonymousMode = false,
+    AnonymousModeToggle = nil,
+    CommandPalette = nil,
+    Commands = {},
+    FeatureBadgeStatuses = {
+        Premium = { Color = Color3.fromRGB(255, 202, 72), Priority = 1 },
+        Experimental = { Color = Color3.fromRGB(178, 112, 255), Priority = 2 },
+        Unstable = { Color = Color3.fromRGB(255, 145, 70), Priority = 3 },
+        Detected = { Color = Color3.fromRGB(245, 75, 90), Priority = 4 },
+    },
+    Flags = {
+        AnonymousMode = false,
+    },
 
     --// Search \\--
     SearchText = "",
@@ -365,6 +379,12 @@ local Templates = {
     Window = {
         Title = "No Title",
         Footer = "No Footer",
+        KeyStatus = false,
+        AnonymousMode = false,
+        CommandPalette = true,
+        CommandPaletteKeybind = Enum.KeyCode.K,
+        CommandPaletteRequireControl = true,
+        CommandPaletteMaxResults = 9,
 
         Position = UDim2.fromOffset(6, 6),
         Size = UDim2.fromOffset(720, 600),
@@ -418,6 +438,28 @@ local Templates = {
         TabTransitionTime = 0.22,
         TabSwipeOffset = 26,
         TabSwipeFrom = "bottom"
+    },
+    KeyStatus = {
+        Enabled = true,
+        Provider = "Luarmor",
+        Status = nil,
+        Developer = false,
+        Username = LocalPlayer.Name,
+        DisplayName = LocalPlayer.DisplayName,
+        UserId = LocalPlayer.UserId,
+        Anonymous = false,
+        RemainingTime = nil,
+        Lifetime = nil,
+        GetRemainingTime = nil,
+        LifetimeText = nil,
+        DurationLabel = "Access remaining",
+        StatusColors = {
+            Freemium = Color3.fromRGB(145, 145, 155),
+            Premium = Color3.fromRGB(125, 85, 255),
+            Developer = Color3.fromRGB(67, 196, 128),
+            Expired = Color3.fromRGB(235, 75, 75),
+            ["IN-DEV"] = Color3.fromRGB(245, 185, 70),
+        },
     },
     Dialog = {
         Title = "Dialog",
@@ -501,6 +543,10 @@ local Templates = {
 
         Multi = false,
         DragSelect = false,
+        SelectionControls = false,
+        Prioritize = false,
+        PriorityButtonsPosition = "Right",
+        AutoSizeDropdown = false,
         MaxVisibleDropdownItems = 8,
 
         Callback = function() end,
@@ -1179,6 +1225,211 @@ function Library:GiveSignal(Connection: RBXScriptConnection | RBXScriptSignal)
     end
 
     return Connection
+end
+
+function Library:GetLuarmorKeyStatus(Overrides: { [string]: any }?): { [string]: any }
+    setthreadidentity(8)
+    local Info = table.clone(Overrides or {})
+    local IsPremium = LRM_IsUserPremium
+    local SecondsLeft = LRM_SecondsLeft
+    local UserNote = tostring(LRM_UserNote or "")
+    local ScriptVersion = tostring(LRM_ScriptVersion or "")
+    local NormalizedNote = string.lower(string.gsub(UserNote, "^%s*(.-)%s*$", "%1"))
+    local Environment = getgenv and getgenv() or _G
+    local ScriptKey = type(Environment) == "table" and rawget(Environment, "script_key") or nil
+    local HasScriptKey = typeof(ScriptKey) == "string" and ScriptKey ~= ""
+    local IsDeveloper = Info.Developer == true or NormalizedNote == "developer"
+    local IsDevelopmentEnvironment = string.upper(ScriptVersion) == "IN-DEV"
+
+    Info.Provider = "Luarmor"
+    Info.Developer = IsDeveloper or IsDevelopmentEnvironment
+    Info.Status = if IsDevelopmentEnvironment
+        then "IN-DEV"
+        elseif IsDeveloper then "Developer"
+        else Info.Status or (if IsPremium == true or HasScriptKey then "Premium" else "Freemium")
+
+    if IsDevelopmentEnvironment then
+        Info.RemainingTime = math.huge
+        Info.Lifetime = math.huge
+        Info.LifetimeText = "IN-DEV"
+        Info.DurationLabel = "Environment"
+    elseif Info.RemainingTime == nil and typeof(SecondsLeft) == "number" then
+        Info.RemainingTime = if SecondsLeft < 0 then math.huge else SecondsLeft
+    end
+
+    if Info.Lifetime == nil and typeof(Info.RemainingTime) == "number" then
+        Info.Lifetime = Info.RemainingTime
+    end
+
+    if Info.LifetimeText == nil and Info.RemainingTime == math.huge then
+        Info.LifetimeText = "Lifetime"
+    elseif Info.LifetimeText == nil and Info.RemainingTime == nil and (IsDeveloper or IsPremium == true or HasScriptKey) then
+        Info.LifetimeText = "Expiration unavailable"
+    end
+
+    return Info
+end
+
+function Library:GetAnonymousMode(): boolean
+    setthreadidentity(8)
+    return Library.AnonymousMode == true
+end
+
+function Library:SetAnonymousMode(State: boolean)
+    setthreadidentity(8)
+    assert(typeof(State) == "boolean", "Anonymous mode must be a boolean")
+
+    Library.AnonymousMode = State
+    Library.Flags.AnonymousMode = State
+
+    for _, Component in Library.KeyStatusComponents do
+        if not Component.Destroyed and typeof(Component.ApplyAnonymousMode) == "function" then
+            Component:ApplyAnonymousMode(State)
+        end
+    end
+
+    local Toggle = Library.AnonymousModeToggle
+    if Toggle and not Toggle.Destroyed and Toggle.Value ~= State then
+        Toggle:SetValue(State)
+    end
+end
+
+function Library:GetFeatureBadges(Info: { [string]: any }?): { string }
+    setthreadidentity(8)
+    local Badges = {}
+    local Added = {}
+
+    local function AddBadge(Value: unknown)
+        if typeof(Value) ~= "string" then
+            return
+        end
+
+        local NormalizedValue = string.lower(Value)
+        for Name in Library.FeatureBadgeStatuses do
+            if string.lower(Name) == NormalizedValue and not Added[Name] then
+                Added[Name] = true
+                table.insert(Badges, Name)
+                return
+            end
+        end
+    end
+
+    if typeof(Info) == "table" then
+        AddBadge(Info.Status)
+
+        if typeof(Info.Badges) == "string" then
+            AddBadge(Info.Badges)
+        elseif typeof(Info.Badges) == "table" then
+            for Key, Value in Info.Badges do
+                if typeof(Key) == "number" then
+                    AddBadge(Value)
+                elseif Value == true then
+                    AddBadge(Key)
+                end
+            end
+        end
+
+        for Name in Library.FeatureBadgeStatuses do
+            if Info[Name] == true then
+                AddBadge(Name)
+            end
+        end
+    end
+
+    table.sort(Badges, function(First: string, Second: string): boolean
+        return Library.FeatureBadgeStatuses[First].Priority < Library.FeatureBadgeStatuses[Second].Priority
+    end)
+    return Badges
+end
+
+function Library:FormatFeatureText(Text: string, Badges: { string }?): string
+    setthreadidentity(8)
+    assert(typeof(Text) == "string", "Feature text must be a string")
+
+    if typeof(Badges) ~= "table" or #Badges == 0 then
+        return Text
+    end
+
+    local Parts = table.create(#Badges)
+    for Index, Name in Badges do
+        local Status = Library.FeatureBadgeStatuses[Name]
+        if not Status then
+            continue
+        end
+
+        local Color = Status.Color
+        local Red = math.round(Color.R * 255)
+        local Green = math.round(Color.G * 255)
+        local Blue = math.round(Color.B * 255)
+        Parts[Index] = `<font color="rgb({Red},{Green},{Blue})">[{string.upper(Name)}]</font>`
+    end
+
+    return `{Text}  {table.concat(Parts, " ")}`
+end
+
+function Library:BindFeatureBadges(Element: { [string]: any }, Info: { [string]: any }, UpdateDisplay: (string) -> ()): ()
+    setthreadidentity(8)
+    local Badges = Library:GetFeatureBadges(Info)
+    Element.Badges = Badges
+
+    function Element:SetFeatureBadges(NewBadges: string | { string } | { [string]: boolean })
+        setthreadidentity(8)
+        local BadgeInfo = { Badges = NewBadges }
+        Element.Badges = Library:GetFeatureBadges(BadgeInfo)
+        UpdateDisplay(Library:FormatFeatureText(Element.Text or "", Element.Badges))
+
+        if Element.Command and not Element.Command.Destroyed then
+            Element.Command.Badges = table.clone(Element.Badges)
+            if Library.CommandPalette and Library.CommandPalette.Visible then
+                Library.CommandPalette:Refresh()
+            end
+        end
+    end
+
+    function Element:GetFeatureBadges(): { string }
+        setthreadidentity(8)
+        return table.clone(Element.Badges)
+    end
+
+    UpdateDisplay(Library:FormatFeatureText(Element.Text or "", Badges))
+end
+
+function Library:RegisterElementCommand(Element: { [string]: any }, Groupbox: { [string]: any }, Info: { [string]: any })
+    setthreadidentity(8)
+    local Window = Library.Window
+    if not Window or typeof(Window.RegisterCommand) ~= "function" or Info.CommandPalette == false then
+        return
+    end
+
+    local Text = Info.CommandName or Element.Text
+    if typeof(Text) ~= "string" or Text == "" then
+        return
+    end
+
+    local Tab = Groupbox.Tab
+    local TabName = Tab and Tab.Name or "Interface"
+    local GroupboxName = Groupbox.Name or "Controls"
+
+    Element.Command = Window:RegisterCommand({
+        Id = `Element:{tostring(Element)}`,
+        Name = Text,
+        Description = Info.CommandDescription or `{TabName} / {GroupboxName}`,
+        Keywords = Info.CommandKeywords,
+        Badges = Element.Badges,
+        Element = Element,
+        Action = function()
+            setthreadidentity(8)
+            Window:RevealElement(Element, Groupbox)
+
+            if typeof(Info.CommandAction) == "function" then
+                Library:SafeCallback(Info.CommandAction, Element)
+            elseif Element.Type == "Toggle" and not Element.Disabled then
+                Element:SetValue(not Element.Value)
+            elseif Element.Type == "Button" and not Element.Disabled and not Element.Risky and not Element.DoubleClick then
+                Library:SafeCallback(Element.Func)
+            end
+        end,
+    })
 end
 
 function IsValidCustomIcon(Icon: string)
@@ -4901,6 +5152,17 @@ do
                 Info.Disabled = Params.Disabled or false
                 Info.Visible = Params.Visible or true
                 Info.Idx = typeof(Second) == "table" and First or nil
+                Info.Status = Params.Status
+                Info.Badges = Params.Badges
+                Info.Premium = Params.Premium
+                Info.Experimental = Params.Experimental
+                Info.Unstable = Params.Unstable
+                Info.Detected = Params.Detected
+                Info.CommandPalette = Params.CommandPalette
+                Info.CommandName = Params.CommandName
+                Info.CommandDescription = Params.CommandDescription
+                Info.CommandKeywords = Params.CommandKeywords
+                Info.CommandAction = Params.CommandAction
             else
                 Info.Text = First or ""
                 Info.Func = Second or function() end
@@ -5044,6 +5306,10 @@ do
 
         Button.Base, Button.Stroke = CreateButton(Button)
         InitEvents(Button)
+        Library:BindFeatureBadges(Button, Info, function(Text: string)
+            setthreadidentity(8)
+            Button.Base.Text = Text
+        end)
 
         function Button:AddButton(...)
             setthreadidentity(8)
@@ -5206,7 +5472,7 @@ do
         function Button:SetText(Text: string)
             setthreadidentity(8)
             Button.Text = Text
-            Button.Base.Text = Text
+            Button.Base.Text = Library:FormatFeatureText(Text, Button.Badges)
         end
 
         if typeof(Button.Tooltip) == "string" or typeof(Button.DisabledTooltip) == "string" then
@@ -5231,11 +5497,17 @@ do
             table.insert(Buttons, Button)
         end
 
+        Library:RegisterElementCommand(Button, Groupbox, Info)
+
         Button.AddKeyPicker = BaseAddons.__index.AddKeyPicker
 
         function Button:Destroy()
             setthreadidentity(8)
             Button.Destroyed = true
+
+            if Button.Command then
+                Button.Command:Destroy()
+            end
 
             if Button.TooltipTable then 
                 Button.TooltipTable:Destroy() 
@@ -5327,6 +5599,10 @@ do
             TextXAlignment = Enum.TextXAlignment.Left,
             Parent = Button,
         })
+        Library:BindFeatureBadges(Toggle, Info, function(Text: string)
+            setthreadidentity(8)
+            Label.Text = Text
+        end)
 
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
@@ -5462,7 +5738,7 @@ do
         function Toggle:SetText(Text: string)
             setthreadidentity(8)
             Toggle.Text = Text
-            Label.Text = Text
+            Label.Text = Library:FormatFeatureText(Text, Toggle.Badges)
         end
 
         table.insert(Toggle.Connections, Button.MouseButton1Click:Connect(function()
@@ -5497,10 +5773,15 @@ do
         Toggle.Default = Toggle.Value
 
         Toggles[Idx] = Toggle
+        Library:RegisterElementCommand(Toggle, Groupbox, Info)
 
         function Toggle:Destroy()
             setthreadidentity(8)
             Toggle.Destroyed = true
+
+            if Toggle.Command then
+                Toggle.Command:Destroy()
+            end
 
             if Toggle.Connections then
                 for _, Connection in Toggle.Connections do
@@ -5593,6 +5874,10 @@ do
             TextXAlignment = Enum.TextXAlignment.Left,
             Parent = Button,
         })
+        Library:BindFeatureBadges(Toggle, Info, function(Text: string)
+            setthreadidentity(8)
+            Label.Text = Text
+        end)
 
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
@@ -5746,7 +6031,7 @@ do
         function Toggle:SetText(Text: string)
             setthreadidentity(8)
             Toggle.Text = Text
-            Label.Text = Text
+            Label.Text = Library:FormatFeatureText(Text, Toggle.Badges)
         end
 
         table.insert(Toggle.Connections, Button.MouseButton1Click:Connect(function()
@@ -5781,10 +6066,15 @@ do
         Toggle.Default = Toggle.Value
 
         Toggles[Idx] = Toggle
+        Library:RegisterElementCommand(Toggle, Groupbox, Info)
 
         function Toggle:Destroy()
             setthreadidentity(8)
             Toggle.Destroyed = true
+
+            if Toggle.Command then
+                Toggle.Command:Destroy()
+            end
 
             if Toggle.Connections then
                 for _, Connection in Toggle.Connections do
@@ -6534,6 +6824,11 @@ do
 
             Multi = Info.Multi,
             DragSelect = Info.Multi and not Library.IsMobile and Info.DragSelect == true,
+            SelectionControls = Info.Multi and Info.SelectionControls == true,
+            Prioritize = Info.Multi and Info.Prioritize == true,
+            PriorityButtonsPosition = Info.PriorityButtonsPosition == "Left" and "Left" or "Right",
+            AutoSizeDropdown = Info.AutoSizeDropdown == true,
+            Priority = {},
 
             SpecialType = Info.SpecialType,
             ExcludeLocalPlayer = Info.ExcludeLocalPlayer,
@@ -6683,16 +6978,69 @@ do
             return ValueImage
         end
 
+        local CachedContentWidth = nil
+
+        local function CalculateMenuWidth()
+            setthreadidentity(8)
+            local width = DisplayContainer.AbsoluteSize.X / Library.DPIScale
+
+            if not Dropdown.AutoSizeDropdown then
+                return width
+            end
+
+            if CachedContentWidth == nil then
+                local isDictionary = not IsSequentialArray(Dropdown.Values)
+                local controlWidth = Dropdown.Prioritize and 46 or 16
+                local contentWidth = 0
+
+                for key, rawValue in Dropdown.Values do
+                    local formattedValue = tostring(Info.FormatListValue and Info.FormatListValue(rawValue) or rawValue)
+                    local textWidth = Library:GetTextBounds(formattedValue, DisplayButton.FontFace, 14)
+                    local value = isDictionary and key or rawValue
+                    local imageWidth = GetValueImage(value, rawValue) and 20 or 0
+
+                    contentWidth = math.max(contentWidth, textWidth + controlWidth + imageWidth)
+                end
+
+                CachedContentWidth = contentWidth
+            end
+
+            width = math.max(width, CachedContentWidth)
+
+            local camera = workspace.CurrentCamera
+            local viewportWidth = camera and camera.ViewportSize.X or DisplayContainer.AbsoluteSize.X
+            local maximumWidth = math.max(
+                DisplayContainer.AbsoluteSize.X / Library.DPIScale,
+                viewportWidth / Library.DPIScale - 16
+            )
+
+            return math.min(width, maximumWidth)
+        end
+
+        local function CalculateMenuOffset()
+            setthreadidentity(8)
+            local menuWidth = CalculateMenuWidth() * Library.DPIScale
+            local camera = workspace.CurrentCamera
+            local viewportWidth = camera and camera.ViewportSize.X or DisplayContainer.AbsolutePosition.X + menuWidth
+            local rightOverflow = DisplayContainer.AbsolutePosition.X + menuWidth - viewportWidth + 8
+
+            if rightOverflow <= 0 then
+                return { 0.5, DisplayContainer.AbsoluteSize.Y + 1.5 }
+            end
+
+            return {
+                math.max(8 - DisplayContainer.AbsolutePosition.X, 0.5 - rightOverflow),
+                DisplayContainer.AbsoluteSize.Y + 1.5,
+            }
+        end
+
         local MenuTable = Library:AddContextMenu(
             DisplayContainer,
             function()
                 setthreadidentity(8)
-                return UDim2.fromOffset((DisplayContainer.AbsoluteSize.X / Library.DPIScale), 0)
+                return UDim2.fromOffset(CalculateMenuWidth(), 0)
             end,
-            function()
-                setthreadidentity(8)
-                return { 0.5, DisplayContainer.AbsoluteSize.Y + 1.5 }
-            end,
+            CalculateMenuOffset,
             2,
             function(Active: boolean)
                 setthreadidentity(8)
@@ -6716,20 +7064,85 @@ do
         Dropdown.Menu = MenuTable
 
         local ItemHeight = 21
+        local HeaderHeight = Dropdown.SelectionControls and 29 or 0
         local PoolSize = math.max(1, Info.MaxVisibleDropdownItems + 2)
         local Pool = {}
         local FilteredEntries = {}
 
+        if Dropdown.SelectionControls then
+            local Header = New("Frame", {
+                BackgroundTransparency = 1,
+                Size = UDim2.new(1, 0, 0, HeaderHeight),
+                Parent = MenuTable.Menu,
+            })
+
+            local SelectAllButton = New("TextButton", {
+                BackgroundColor3 = "MainColor",
+                Position = UDim2.fromOffset(4, 4),
+                Size = UDim2.new(0.5, -6, 0, 20),
+                Text = "Select All",
+                TextSize = 13,
+                Parent = Header,
+            })
+
+            local UnselectAllButton = New("TextButton", {
+                AnchorPoint = Vector2.new(1, 0),
+                BackgroundColor3 = "MainColor",
+                Position = UDim2.new(1, -4, 0, 4),
+                Size = UDim2.new(0.5, -6, 0, 20),
+                Text = "Unselect All",
+                TextSize = 13,
+                Parent = Header,
+            })
+
+            for _, button in { SelectAllButton, UnselectAllButton } do
+                local corner = New("UICorner", {
+                    CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+                    Parent = button,
+                })
+                table.insert(Library.Corners, corner)
+
+                New("UIStroke", {
+                    Color = "OutlineColor",
+                    Parent = button,
+                })
+            end
+
+            New("Frame", {
+                AnchorPoint = Vector2.new(0, 1),
+                BackgroundColor3 = "OutlineColor",
+                BorderSizePixel = 0,
+                Position = UDim2.fromScale(0, 1),
+                Size = UDim2.new(1, 0, 0, 1),
+                Parent = Header,
+            })
+
+            table.insert(Dropdown.Connections, SelectAllButton.Activated:Connect(function()
+                setthreadidentity(8)
+                local SelectAll = rawget(Dropdown, "SelectAll")
+                if typeof(SelectAll) == "function" then
+                    SelectAll(Dropdown)
+                end
+            end))
+            table.insert(Dropdown.Connections, UnselectAllButton.Activated:Connect(function()
+                setthreadidentity(8)
+                local UnselectAll = rawget(Dropdown, "UnselectAll")
+                if typeof(UnselectAll) == "function" then
+                    UnselectAll(Dropdown)
+                end
+            end))
+        end
+
         function Dropdown:RecalculateListSize(Count)
             setthreadidentity(8)
             local ItemCount = Count or #FilteredEntries
-            local Y = math.clamp(ItemCount * ItemHeight, 0, Info.MaxVisibleDropdownItems * ItemHeight)
+            local Y = HeaderHeight + math.clamp(ItemCount * ItemHeight, 0, Info.MaxVisibleDropdownItems * ItemHeight)
 
-            MenuTable.Menu.CanvasSize = UDim2.fromOffset(0, ItemCount * ItemHeight)
+            MenuTable.Menu.CanvasSize = UDim2.fromOffset(0, HeaderHeight + ItemCount * ItemHeight)
 
             MenuTable:SetSize(function()
                 setthreadidentity(8)
-                return UDim2.fromOffset((DisplayContainer.AbsoluteSize.X / Library.DPIScale), Y)
+                return UDim2.fromOffset(CalculateMenuWidth(), Y)
             end)
         end
 
@@ -6815,8 +7228,16 @@ do
             local Table = {}
 
             if Info.Multi then
-                for Value, _ in Dropdown.Value do
-                    table.insert(Table, Value)
+                if Dropdown.Prioritize then
+                    for _, Value in Dropdown.Priority do
+                        if Dropdown.Value[Value] then
+                            table.insert(Table, Value)
+                        end
+                    end
+                else
+                    for Value in Dropdown.Value do
+                        table.insert(Table, Value)
+                    end
                 end
             else
                 if Dropdown.Value then
@@ -6836,6 +7257,38 @@ do
         local DragInputEndedConn = nil
         local DragInputChangedConn = nil
 
+        local function SynchronizePriority()
+            setthreadidentity(8)
+            if not Dropdown.Prioritize then
+                return
+            end
+
+            local existingValues = {}
+            local isDictionary = not IsSequentialArray(Dropdown.Values)
+
+            for key, rawValue in Dropdown.Values do
+                existingValues[isDictionary and key or rawValue] = true
+            end
+
+            local priority = {}
+            for _, value in Dropdown.Priority do
+                if existingValues[value] then
+                    priority[#priority + 1] = value
+                    existingValues[value] = nil
+                end
+            end
+
+            for key, rawValue in Dropdown.Values do
+                local value = isDictionary and key or rawValue
+                if existingValues[value] then
+                    priority[#priority + 1] = value
+                    existingValues[value] = nil
+                end
+            end
+
+            Dropdown.Priority = priority
+        end
+
         local function RecomputeFilteredEntries()
             setthreadidentity(8)
             local Values = Dropdown.Values
@@ -6844,6 +7297,8 @@ do
 
             local EnabledList, DisabledList = {}, {}
             local Pending = {}
+
+            SynchronizePriority()
 
             for Key, RawValue in Values do
                 local Value = IsDictionary and Key or RawValue
@@ -6875,20 +7330,38 @@ do
                 end)
             end
 
-            for _, Entry in Pending do
-                if Entry.IsDisabled then
-                    table.insert(DisabledList, Entry)
-                else
-                    table.insert(EnabledList, Entry)
+            if Dropdown.Prioritize then
+                local priorityIndexes = {}
+                for index, value in Dropdown.Priority do
+                    priorityIndexes[value] = index
                 end
+
+                table.sort(Pending, function(first, second)
+                    setthreadidentity(8)
+                    return (priorityIndexes[first.Value] or math.huge) < (priorityIndexes[second.Value] or math.huge)
+                end)
             end
 
             table.clear(FilteredEntries)
-            for _, Entry in EnabledList do
-                table.insert(FilteredEntries, Entry)
-            end
-            for _, Entry in DisabledList do
-                table.insert(FilteredEntries, Entry)
+            if Dropdown.Prioritize then
+                for _, Entry in Pending do
+                    table.insert(FilteredEntries, Entry)
+                end
+            else
+                for _, Entry in Pending do
+                    if Entry.IsDisabled then
+                        table.insert(DisabledList, Entry)
+                    else
+                        table.insert(EnabledList, Entry)
+                    end
+                end
+
+                for _, Entry in EnabledList do
+                    table.insert(FilteredEntries, Entry)
+                end
+                for _, Entry in DisabledList do
+                    table.insert(FilteredEntries, Entry)
+                end
             end
         end
 
@@ -6900,7 +7373,7 @@ do
             end
 
             local MaxFirst = Total - PoolSize + 1
-            local ScrollY = MenuTable.Menu.CanvasPosition.Y / Library.DPIScale
+            local ScrollY = math.max(0, MenuTable.Menu.CanvasPosition.Y / Library.DPIScale - HeaderHeight)
             local Index = math.floor(ScrollY / ItemHeight) + 1
             return math.clamp(Index, 1, MaxFirst)
         end
@@ -6923,7 +7396,7 @@ do
                 end
 
                 Row.Container.Visible = true
-                Row.Container.Position = UDim2.fromOffset(0, (DataIndex - 1) * ItemHeight)
+                Row.Container.Position = UDim2.fromOffset(0, HeaderHeight + (DataIndex - 1) * ItemHeight)
 
                 local IsLast = DataIndex == Total
                 Row.Corner.BottomRightRadius = IsLast and UDim.new(0, Library.CornerRadius / 2) or UDim.new(0, 0)
@@ -6931,18 +7404,27 @@ do
 
                 Row.Button.Text = Entry.FormattedValue
 
+                local priorityWidth = Dropdown.Prioritize and 40 or 0
+                local priorityOnLeft = Dropdown.Prioritize and Dropdown.PriorityButtonsPosition == "Left"
+
                 if Entry.ValueImage then
                     Row.Image.Visible = true
                     Row.Image.Image = Entry.ValueImage.Url
                     Row.Image.ImageRectOffset = Entry.ValueImage.ImageRectOffset or Vector2.zero
                     Row.Image.ImageRectSize = Entry.ValueImage.ImageRectSize or Vector2.zero
-                    Row.Button.Size = UDim2.new(1, -18, 0, ItemHeight)
-                    Row.Button.Position = UDim2.fromOffset(18, 0)
+                    Row.Image.Position = UDim2.fromOffset(priorityOnLeft and 44 or 4, 3)
+                    Row.Button.Size = UDim2.new(1, -18 - priorityWidth, 0, ItemHeight)
+                    Row.Button.Position = UDim2.fromOffset(18 + (priorityOnLeft and 40 or 0), 0)
                 else
                     Row.Image.Visible = false
-                    Row.Button.Size = UDim2.new(1, 0, 0, ItemHeight)
-                    Row.Button.Position = UDim2.fromOffset(0, 0)
+                    Row.Button.Size = UDim2.new(1, -priorityWidth, 0, ItemHeight)
+                    Row.Button.Position = UDim2.fromOffset(priorityOnLeft and 40 or 0, 0)
                 end
+
+                Row.UpButton.Visible = Dropdown.Prioritize
+                Row.DownButton.Visible = Dropdown.Prioritize
+                Row.UpButton.Position = priorityOnLeft and UDim2.fromOffset(2, 2) or UDim2.new(1, -40, 0, 2)
+                Row.DownButton.Position = priorityOnLeft and UDim2.fromOffset(21, 2) or UDim2.new(1, -21, 0, 2)
 
                 Row:UpdateButton()
             end
@@ -6953,6 +7435,68 @@ do
             Library:SafeCallback(Dropdown.Callback, Dropdown.Value)
             Library:SafeCallback(Dropdown.Changed, Dropdown.Value)
         end      
+
+        function Dropdown:MovePriority(Value, Direction)
+            setthreadidentity(8)
+            if not Dropdown.Prioritize or Direction == 0 then
+                return false
+            end
+
+            SynchronizePriority()
+
+            local currentIndex = table.find(Dropdown.Priority, Value)
+            if not currentIndex then
+                return false
+            end
+
+            local targetIndex = math.clamp(currentIndex + (Direction < 0 and -1 or 1), 1, #Dropdown.Priority)
+            if currentIndex == targetIndex then
+                return false
+            end
+
+            Dropdown.Priority[currentIndex], Dropdown.Priority[targetIndex] = Dropdown.Priority[targetIndex], Dropdown.Priority[currentIndex]
+            Dropdown:BuildDropdownList()
+            Dropdown:RunChanged()
+
+            return true
+        end
+
+        function Dropdown:SelectAll()
+            setthreadidentity(8)
+            if not Info.Multi then
+                return
+            end
+
+            local isDictionary = not IsSequentialArray(Dropdown.Values)
+            for key, rawValue in Dropdown.Values do
+                local value = isDictionary and key or rawValue
+                local isDisabled = table.find(Dropdown.DisabledValues, value) ~= nil
+                    or (rawValue ~= value and table.find(Dropdown.DisabledValues, rawValue) ~= nil)
+
+                if not isDisabled then
+                    Dropdown.Value[value] = true
+                end
+            end
+
+            Dropdown:Display()
+            Dropdown:RefreshPool()
+            Library:UpdateDependencyBoxes()
+            Dropdown:RunChanged()
+        end
+
+        function Dropdown:UnselectAll()
+            setthreadidentity(8)
+            if not Info.Multi then
+                return
+            end
+
+            table.clear(Dropdown.Value)
+
+            Dropdown:Display()
+            Dropdown:RefreshPool()
+            Library:UpdateDependencyBoxes()
+            Dropdown:RunChanged()
+        end
 
         local function StopDragSelect()
             setthreadidentity(8)
@@ -7094,10 +7638,37 @@ do
                 Parent = Button,
             })
 
+            local UpButton = New("ImageButton", {
+                BackgroundTransparency = 1,
+                Image = ArrowIcon and ArrowIcon.Url or "",
+                ImageColor3 = "FontColor",
+                ImageRectOffset = ArrowIcon and ArrowIcon.ImageRectOffset or Vector2.zero,
+                ImageRectSize = ArrowIcon and ArrowIcon.ImageRectSize or Vector2.zero,
+                Size = UDim2.fromOffset(17, 17),
+                Visible = false,
+                ZIndex = 2,
+                Parent = Container,
+            })
+
+            local DownButton = New("ImageButton", {
+                BackgroundTransparency = 1,
+                Image = ArrowIcon and ArrowIcon.Url or "",
+                ImageColor3 = "FontColor",
+                ImageRectOffset = ArrowIcon and ArrowIcon.ImageRectOffset or Vector2.zero,
+                ImageRectSize = ArrowIcon and ArrowIcon.ImageRectSize or Vector2.zero,
+                Rotation = 180,
+                Size = UDim2.fromOffset(17, 17),
+                Visible = false,
+                ZIndex = 2,
+                Parent = Container,
+            })
+
             Row.Container = Container
             Row.Corner = Corner
             Row.Image = Image
             Row.Button = Button
+            Row.UpButton = UpButton
+            Row.DownButton = DownButton
 
             function Row:UpdateButton()
                 setthreadidentity(8)
@@ -7119,7 +7690,27 @@ do
                 if Entry.ValueImage then
                     Image.ImageTransparency = Entry.IsDisabled and 0.8 or Selected and 0 or 0.5
                 end
+
+                if Dropdown.Prioritize then
+                    local priorityIndex = table.find(Dropdown.Priority, Entry.Value)
+                    UpButton.ImageTransparency = priorityIndex == 1 and 0.8 or 0.35
+                    DownButton.ImageTransparency = priorityIndex == #Dropdown.Priority and 0.8 or 0.35
+                end
             end
+
+            table.insert(Dropdown.Connections, UpButton.Activated:Connect(function()
+                setthreadidentity(8)
+                if Row.Entry then
+                    Dropdown:MovePriority(Row.Entry.Value, -1)
+                end
+            end))
+
+            table.insert(Dropdown.Connections, DownButton.Activated:Connect(function()
+                setthreadidentity(8)
+                if Row.Entry then
+                    Dropdown:MovePriority(Row.Entry.Value, 1)
+                end
+            end))
 
             Button.MouseButton1Click:Connect(function()
                 setthreadidentity(8)
@@ -7259,16 +7850,42 @@ do
             setthreadidentity(8)
             if Info.Multi then
                 local Table = {}
+                local SelectedOrder = {}
 				
                 for Val, Active in Value or {} do
                     if typeof(Active) ~= "boolean" then
-                        Table[Active] = true
+                        if ValueExists(Active) then
+                            Table[Active] = true
+                            table.insert(SelectedOrder, Active)
+                        end
                     elseif Active and ValueExists(Val) then
                         Table[Val] = true
+                        table.insert(SelectedOrder, Val)
                     end
                 end
 
                 Dropdown.Value = Table
+
+                if Dropdown.Prioritize and #SelectedOrder > 0 then
+                    local selectedSet = {}
+                    local Priority = {}
+
+                    for _, Val in SelectedOrder do
+                        if not selectedSet[Val] then
+                            table.insert(Priority, Val)
+                            selectedSet[Val] = true
+                        end
+                    end
+                    for _, Val in Dropdown.Priority do
+                        if not selectedSet[Val] then
+                            table.insert(Priority, Val)
+                            selectedSet[Val] = true
+                        end
+                    end
+
+                    Dropdown.Priority = Priority
+                    SynchronizePriority()
+                end
             else
                 if ValueExists(Value) then
                     Dropdown.Value = Value
@@ -7291,6 +7908,7 @@ do
         function Dropdown:SetValues(Values)
             setthreadidentity(8)
             Dropdown.Values = Values
+            CachedContentWidth = nil
 
             local Changed = false
             if Info.Multi then
@@ -7313,6 +7931,96 @@ do
                 Library:UpdateDependencyBoxes()
                 Dropdown:RunChanged()
             end
+        end
+
+        function Dropdown:SetPriority(Values)
+            setthreadidentity(8)
+            if not Dropdown.Prioritize or typeof(Values) ~= "table" then
+                return
+            end
+
+            local Priority = {}
+            local Added = {}
+
+            for _, Value in Values do
+                if ValueExists(Value) and not Added[Value] then
+                    table.insert(Priority, Value)
+                    Added[Value] = true
+                end
+            end
+            for _, Value in Dropdown.Priority do
+                if ValueExists(Value) and not Added[Value] then
+                    table.insert(Priority, Value)
+                    Added[Value] = true
+                end
+            end
+
+            Dropdown.Priority = Priority
+            Dropdown:BuildDropdownList()
+            Dropdown:RunChanged()
+        end
+
+        function Dropdown:UpdateKeys(Renames)
+            setthreadidentity(8)
+            if typeof(Renames) ~= "table" then
+                return false
+            end
+
+            local Changed = false
+            if IsSequentialArray(Dropdown.Values) then
+                for Index, OldValue in Dropdown.Values do
+                    local NewValue = Renames[OldValue]
+                    if NewValue ~= nil and NewValue ~= OldValue then
+                        Dropdown.Values[Index] = NewValue
+                        Changed = true
+                    end
+                end
+            else
+                for OldValue, NewValue in Renames do
+                    if NewValue ~= nil and NewValue ~= OldValue and Dropdown.Values[OldValue] ~= nil then
+                        Dropdown.Values[NewValue] = Dropdown.Values[OldValue]
+                        Dropdown.Values[OldValue] = nil
+                        Changed = true
+                    end
+                end
+            end
+
+            if not Changed then
+                return false
+            end
+
+            if Info.Multi then
+                for OldValue, NewValue in Renames do
+                    if Dropdown.Value[OldValue] then
+                        Dropdown.Value[OldValue] = nil
+                        Dropdown.Value[NewValue] = true
+                    end
+                end
+            elseif Dropdown.Value ~= nil and Renames[Dropdown.Value] ~= nil then
+                Dropdown.Value = Renames[Dropdown.Value]
+            end
+
+            for PriorityIndex, OldValue in Dropdown.Priority do
+                local NewValue = Renames[OldValue]
+                if NewValue ~= nil then
+                    Dropdown.Priority[PriorityIndex] = NewValue
+                end
+            end
+
+            CachedContentWidth = nil
+            Dropdown:BuildDropdownList()
+            Dropdown:Display()
+
+            return true
+        end
+
+        function Dropdown:UpdateKey(OldValue, NewValue)
+            setthreadidentity(8)
+            if OldValue == nil or NewValue == nil then
+                return false
+            end
+
+            return Dropdown:UpdateKeys({ [OldValue] = NewValue })
         end
 
         function Dropdown:AddValues(Values)
@@ -7346,6 +8054,7 @@ do
                 end
             end
 
+            CachedContentWidth = nil
             Dropdown:BuildDropdownList()
         end
 
@@ -7377,6 +8086,7 @@ do
             end
             
             Dropdown.ValueImages = ValueImages
+            CachedContentWidth = nil
             Dropdown:BuildDropdownList()
         end
 
@@ -7389,7 +8099,8 @@ do
             for key, val in ValueImages do
                 Dropdown.ValueImages[key] = val
             end
-            
+
+            CachedContentWidth = nil
             Dropdown:BuildDropdownList()
         end
 
@@ -9085,6 +9796,8 @@ function Library:CreateWindow(WindowInfo)
     Library.Scheme.Font = WindowInfo.Font
     Library.ToggleKeybind = WindowInfo.ToggleKeybind
     Library.GlobalSearch = WindowInfo.GlobalSearch
+    Library.AnonymousMode = WindowInfo.AnonymousMode == true
+    Library.Flags.AnonymousMode = Library.AnonymousMode
     
     Library.Animations = WindowInfo.Animations
     Library.TabTransitionInfo = TweenInfo.new(
@@ -9113,6 +9826,8 @@ function Library:CreateWindow(WindowInfo)
     local BottomBackground
     local FooterLabel
     local TopBar
+    local KeyStatusComponent
+    local UpdateKeyStatusLayout = function() end
 
     local InitialLeftWidth = math.ceil(WindowInfo.Size.X.Offset * 0.3)
     local IsCompact = WindowInfo.SidebarCompacted
@@ -9573,6 +10288,964 @@ function Library:CreateWindow(WindowInfo)
         WindowInfo.Footer = Footer
     end
 
+    function Window:AddKeyStatus(Info: { [string]: any }?): { [string]: any }?
+        setthreadidentity(8)
+        assert(Info == nil or typeof(Info) == "table", "Expected table for key status got: " .. typeof(Info))
+
+        if KeyStatusComponent and not KeyStatusComponent.Destroyed then
+            KeyStatusComponent:SetData(Info or {})
+            if Info and Info.SettingsGroupbox then
+                Window:AddKeyStatusSettings(Info.SettingsGroupbox, Info.SettingsToggleIndex)
+            end
+            return KeyStatusComponent
+        end
+
+        local ResolvedInfo = Info or {}
+        if ResolvedInfo.Provider == nil or string.lower(tostring(ResolvedInfo.Provider)) == "luarmor" then
+            ResolvedInfo = Library:GetLuarmorKeyStatus(ResolvedInfo)
+        end
+
+        local Data = Library:Validate(ResolvedInfo, Templates.KeyStatus)
+        if not Data.Enabled then
+            return nil
+        end
+
+        local Height = 112
+        local RemainingTimeSetAt = os.clock()
+        local BaseRemainingTime = Data.RemainingTime
+        local LastRemainingSecond = -1
+        local RefreshConnection: RBXScriptConnection?
+
+        local Card = New("Frame", {
+            AnchorPoint = Vector2.new(0, 1),
+            BackgroundColor3 = "MainColor",
+            Position = UDim2.new(0, 8, 1, -28),
+            Size = UDim2.new(0, math.max(Tabs.Size.X.Offset - 16, 0), 0, Height),
+            Parent = MainFrame,
+        })
+        table.insert(Library.Corners, New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = Card,
+        }))
+        Library:AddOutline(Card)
+
+        local Avatar = New("ImageLabel", {
+            BackgroundColor3 = "BackgroundColor",
+            Image = "",
+            Position = UDim2.fromOffset(10, 10),
+            Size = UDim2.fromOffset(42, 42),
+            Parent = Card,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0),
+            Parent = Avatar,
+        })
+        local AvatarStroke = New("UIStroke", {
+            Color = Data.StatusColors.Freemium,
+            Thickness = 1,
+            Parent = Avatar,
+        })
+
+        local DisplayNameLabel = New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(60, 8),
+            Size = UDim2.new(1, -70, 0, 19),
+            Text = "",
+            TextSize = 14,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = Card,
+        })
+        local UsernameLabel = New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(60, 27),
+            Size = UDim2.new(1, -70, 0, 16),
+            Text = "",
+            TextSize = 12,
+            TextTransparency = 0.5,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = Card,
+        })
+        local StatusDot = New("Frame", {
+            BackgroundColor3 = Data.StatusColors.Freemium,
+            Position = UDim2.fromOffset(60, 46),
+            Size = UDim2.fromOffset(6, 6),
+            Parent = Card,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0),
+            Parent = StatusDot,
+        })
+        local StatusLabel = New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(71, 41),
+            Size = UDim2.new(1, -81, 0, 16),
+            Text = "",
+            TextSize = 12,
+            TextTransparency = 0.25,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = Card,
+        })
+
+        New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(10, 67),
+            Size = UDim2.new(0.5, -10, 0, 16),
+            Text = tostring(Data.DurationLabel),
+            TextSize = 12,
+            TextTransparency = 0.5,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = Card,
+        })
+        local RemainingLabel = New("TextLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0.5, 0, 0, 67),
+            Size = UDim2.new(0.5, -10, 0, 16),
+            Text = "",
+            TextSize = 12,
+            TextTransparency = 0.25,
+            TextXAlignment = Enum.TextXAlignment.Right,
+            Parent = Card,
+        })
+
+        local ProgressBackground = New("Frame", {
+            BackgroundColor3 = "BackgroundColor",
+            Position = UDim2.fromOffset(10, 91),
+            Size = UDim2.new(1, -20, 0, 7),
+            Parent = Card,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0),
+            Parent = ProgressBackground,
+        })
+        local ProgressFill = New("Frame", {
+            BackgroundColor3 = Data.StatusColors.Freemium,
+            Size = UDim2.fromScale(1, 1),
+            Parent = ProgressBackground,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0),
+            Parent = ProgressFill,
+        })
+
+        local Component = {
+            Type = "KeyStatus",
+            Data = Data,
+            Container = Card,
+            Destroyed = false,
+            Visible = true,
+        }
+
+        local function FormatRemainingTime(Seconds: number): string
+            if Seconds == math.huge then
+                return Data.LifetimeText or "Lifetime"
+            end
+
+            Seconds = math.max(0, math.floor(Seconds))
+            local Days = Seconds // 86400
+            local Hours = (Seconds % 86400) // 3600
+            local Minutes = (Seconds % 3600) // 60
+            local RemainingSeconds = Seconds % 60
+
+            if Days > 0 then
+                return string.format("%dd %02dh", Days, Hours)
+            elseif Hours > 0 then
+                return string.format("%dh %02dm", Hours, Minutes)
+            elseif Minutes > 0 then
+                return string.format("%dm %02ds", Minutes, RemainingSeconds)
+            end
+
+            return string.format("%ds", RemainingSeconds)
+        end
+
+        function Component:GetRemainingTime(): number?
+            setthreadidentity(8)
+            if typeof(Data.GetRemainingTime) == "function" then
+                local Success, RemainingTime = pcall(Data.GetRemainingTime, Data)
+                if Success and typeof(RemainingTime) == "number" then
+                    return RemainingTime
+                elseif not Success then
+                    warn(`[Obsidian] Key status time provider failed: {RemainingTime}`)
+                end
+            end
+
+            if typeof(BaseRemainingTime) == "number" then
+                if BaseRemainingTime == math.huge then
+                    return math.huge
+                end
+
+                return math.max(0, BaseRemainingTime - (os.clock() - RemainingTimeSetAt))
+            end
+
+            return nil
+        end
+
+        function Component:ApplyAnonymousMode(State: boolean)
+            setthreadidentity(8)
+            assert(typeof(State) == "boolean", "Anonymous mode must be a boolean")
+
+            Data.Anonymous = State
+            Avatar.Image = string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150", State and 0 or Data.UserId)
+            DisplayNameLabel.Text = State and "********" or tostring(Data.DisplayName)
+            UsernameLabel.Text = State and "@********" or `@{Data.Username}`
+        end
+
+        function Component:Refresh(Force: boolean?)
+            setthreadidentity(8)
+            if Component.Destroyed then
+                return
+            end
+
+            local RemainingTime = Component:GetRemainingTime()
+            local RemainingSecond = if typeof(RemainingTime) == "number" then math.floor(RemainingTime) else -1
+            if not Force and RemainingSecond == LastRemainingSecond then
+                return
+            end
+            LastRemainingSecond = RemainingSecond
+
+            local Status = tostring(Data.Status)
+            local Expired = typeof(RemainingTime) == "number" and RemainingTime ~= math.huge and RemainingTime <= 0
+            local StatusColor = if Expired then Data.StatusColors.Expired else Data.StatusColors[Status] or Library.Scheme.AccentColor
+            local Lifetime = Data.Lifetime
+            local Progress = 1
+
+            if typeof(RemainingTime) == "number" then
+                if RemainingTime == math.huge then
+                    RemainingLabel.Text = Data.LifetimeText or "Lifetime"
+                elseif Expired then
+                    RemainingLabel.Text = "Expired"
+                    Progress = 0
+                else
+                    RemainingLabel.Text = FormatRemainingTime(RemainingTime)
+                    if typeof(Lifetime) == "number" and Lifetime > 0 and Lifetime ~= math.huge then
+                        Progress = math.clamp(RemainingTime / Lifetime, 0, 1)
+                    end
+                end
+            else
+                RemainingLabel.Text = Data.LifetimeText
+                    or (if Status == "Developer" or Status == "Premium" then "Expiration unavailable" else "No active key")
+            end
+
+            StatusLabel.Text = Expired and "Expired" or Status
+            StatusLabel.TextColor3 = StatusColor
+            StatusDot.BackgroundColor3 = StatusColor
+            AvatarStroke.Color = StatusColor
+            ProgressFill.BackgroundColor3 = StatusColor
+            ProgressFill.Size = UDim2.fromScale(Progress, 1)
+            Component:ApplyAnonymousMode(Library:GetAnonymousMode())
+        end
+
+        function Component:SetStatus(Status: string)
+            setthreadidentity(8)
+            assert(typeof(Status) == "string", "Key status must be a string")
+            Data.Status = Status
+            Component:Refresh(true)
+        end
+
+        function Component:SetRemainingTime(RemainingTime: number?, _Lifetime: number?)
+            setthreadidentity(8)
+            assert(RemainingTime == nil or typeof(RemainingTime) == "number", "Remaining time must be a number or nil")
+            local Lifetime = _Lifetime
+            assert(Lifetime == nil or typeof(Lifetime) == "number", "Lifetime must be a number or nil")
+
+            BaseRemainingTime = RemainingTime
+            Data.RemainingTime = RemainingTime
+            Data.Lifetime = Lifetime or RemainingTime
+            RemainingTimeSetAt = os.clock()
+            Component:Refresh(true)
+        end
+
+        function Component:SetData(NewInfo: { [string]: any })
+            setthreadidentity(8)
+            assert(typeof(NewInfo) == "table", "Expected table for key status data")
+
+            local UpdatedInfo = NewInfo
+            if UpdatedInfo.Provider == nil or string.lower(tostring(UpdatedInfo.Provider)) == "luarmor" then
+                UpdatedInfo = Library:GetLuarmorKeyStatus(UpdatedInfo)
+            end
+
+            for Key, Value in UpdatedInfo do
+                if Key == "StatusColors" and typeof(Value) == "table" then
+                    for Status, Color in Value do
+                        Data.StatusColors[Status] = Color
+                    end
+                else
+                    Data[Key] = Value
+                end
+            end
+
+            BaseRemainingTime = Data.RemainingTime
+            Data.Lifetime = Data.Lifetime or BaseRemainingTime
+            RemainingTimeSetAt = os.clock()
+            Component.Visible = Data.Enabled ~= false
+            Component:Refresh(true)
+            UpdateKeyStatusLayout()
+        end
+
+        function Component:SetVisible(Visible: boolean)
+            setthreadidentity(8)
+            assert(typeof(Visible) == "boolean", "Key status visibility must be a boolean")
+            Component.Visible = Visible
+            UpdateKeyStatusLayout()
+        end
+
+        function Component:SetAnonymous(State: boolean)
+            setthreadidentity(8)
+            Library:SetAnonymousMode(State)
+        end
+
+        function Component:Destroy()
+            setthreadidentity(8)
+            if Component.Destroyed then
+                return
+            end
+
+            Component.Destroyed = true
+            Component.Visible = false
+            UpdateKeyStatusLayout()
+            if RefreshConnection and RefreshConnection.Connected then
+                RefreshConnection:Disconnect()
+            end
+            local SignalIndex = table.find(Library.Signals, RefreshConnection)
+            if SignalIndex then
+                table.remove(Library.Signals, SignalIndex)
+            end
+            RefreshConnection = nil
+            local ComponentIndex = table.find(Library.KeyStatusComponents, Component)
+            if ComponentIndex then
+                table.remove(Library.KeyStatusComponents, ComponentIndex)
+            end
+            Card:Destroy()
+            KeyStatusComponent = nil
+            UpdateKeyStatusLayout = function() end
+        end
+
+        KeyStatusComponent = Component
+        table.insert(Library.KeyStatusComponents, Component)
+
+        UpdateKeyStatusLayout = function()
+            setthreadidentity(8)
+            local Visible = not Component.Destroyed and Component.Visible and not IsCompact
+            Card.Visible = Visible
+            Card.Size = UDim2.new(0, math.max(Tabs.Size.X.Offset - 16, 0), 0, Height)
+            Tabs.Size = UDim2.new(0, Tabs.Size.X.Offset, 1, Visible and -(70 + Height + 15) or -70)
+        end
+
+        if Data.Lifetime == nil and typeof(BaseRemainingTime) == "number" then
+            Data.Lifetime = BaseRemainingTime
+        end
+        if Data.Anonymous then
+            Library:SetAnonymousMode(true)
+        end
+
+        Component:Refresh(true)
+        UpdateKeyStatusLayout()
+
+        local RefreshElapsed = 0
+        RefreshConnection = Library:GiveSignal(RunService.Heartbeat:Connect(function(DeltaTime: number)
+            setthreadidentity(8)
+            if Component.Destroyed then
+                return
+            end
+
+            RefreshElapsed += DeltaTime
+            if RefreshElapsed < 0.25 then
+                return
+            end
+
+            RefreshElapsed = 0
+            Component:Refresh()
+        end)) :: RBXScriptConnection
+
+        if Data.SettingsGroupbox then
+            Window:AddKeyStatusSettings(Data.SettingsGroupbox, Data.SettingsToggleIndex)
+        end
+
+        return Component
+    end
+
+    function Window:SetKeyStatus(Info: { [string]: any }): { [string]: any }?
+        setthreadidentity(8)
+        return Window:AddKeyStatus(Info)
+    end
+
+    function Window:GetKeyStatus(): { [string]: any }?
+        setthreadidentity(8)
+        return KeyStatusComponent
+    end
+
+    function Window:SetAnonymousMode(State: boolean)
+        setthreadidentity(8)
+        Library:SetAnonymousMode(State)
+    end
+
+    function Window:AddKeyStatusSettings(Groupbox: { [string]: any }, _ToggleIndex: string?): { [string]: any }
+        setthreadidentity(8)
+        assert(typeof(Groupbox) == "table" and typeof(Groupbox.AddToggle) == "function", "Expected an Obsidian groupbox")
+        local ToggleIndex = _ToggleIndex or "ObsidianAnonymousMode"
+        assert(typeof(ToggleIndex) == "string", "Expected string for anonymous mode toggle index")
+
+        local ExistingToggle = Toggles[ToggleIndex]
+        if ExistingToggle then
+            Library.AnonymousModeToggle = ExistingToggle
+            return ExistingToggle
+        end
+
+        local Toggle = Groupbox:AddToggle(ToggleIndex, {
+            Text = "Anonymous Mode",
+            Default = Library:GetAnonymousMode(),
+            Tooltip = "Hides your avatar, username and display name in the key status card.",
+            Callback = function(Value: boolean)
+                setthreadidentity(8)
+                Library:SetAnonymousMode(Value)
+            end,
+        })
+        Library.AnonymousModeToggle = Toggle
+        return Toggle
+    end
+
+    function Window:RegisterCommand(Info: { [string]: any }): { [string]: any }
+        setthreadidentity(8)
+        assert(typeof(Info) == "table", "Command information must be a table")
+        assert(typeof(Info.Name) == "string" and Info.Name ~= "", "Command name must be a non-empty string")
+        assert(typeof(Info.Action) == "function", "Command action must be a function")
+
+        local Id = tostring(Info.Id or Info.Name)
+        for _, ExistingCommand in Library.Commands do
+            if ExistingCommand.Id == Id and not ExistingCommand.Destroyed then
+                ExistingCommand.Name = Info.Name
+                ExistingCommand.Description = tostring(Info.Description or "")
+                ExistingCommand.Keywords = Info.Keywords
+                ExistingCommand.Action = Info.Action
+                ExistingCommand.Badges = Library:GetFeatureBadges(Info)
+                ExistingCommand.Element = Info.Element
+                ExistingCommand.Visible = Info.Visible ~= false
+                ExistingCommand.Disabled = Info.Disabled == true
+                return ExistingCommand
+            end
+        end
+
+        local Command = {
+            Id = Id,
+            Name = Info.Name,
+            Description = tostring(Info.Description or ""),
+            Keywords = Info.Keywords,
+            Action = Info.Action,
+            Badges = if Info.Badges then Library:GetFeatureBadges(Info) else {},
+            Element = Info.Element,
+            Visible = Info.Visible ~= false,
+            Disabled = Info.Disabled == true,
+            Destroyed = false,
+        }
+
+        function Command:SetVisible(Visible: boolean)
+            setthreadidentity(8)
+            assert(typeof(Visible) == "boolean", "Command visibility must be a boolean")
+            Command.Visible = Visible
+            if Library.CommandPalette and Library.CommandPalette.Visible then
+                Library.CommandPalette:Refresh()
+            end
+        end
+
+        function Command:SetDisabled(Disabled: boolean)
+            setthreadidentity(8)
+            assert(typeof(Disabled) == "boolean", "Command disabled state must be a boolean")
+            Command.Disabled = Disabled
+            if Library.CommandPalette and Library.CommandPalette.Visible then
+                Library.CommandPalette:Refresh()
+            end
+        end
+
+        function Command:Destroy()
+            setthreadidentity(8)
+            if Command.Destroyed then
+                return
+            end
+
+            Command.Destroyed = true
+            local Index = table.find(Library.Commands, Command)
+            if Index then
+                table.remove(Library.Commands, Index)
+            end
+            if Library.CommandPalette and Library.CommandPalette.Visible then
+                Library.CommandPalette:Refresh()
+            end
+        end
+
+        table.insert(Library.Commands, Command)
+        if Library.CommandPalette and Library.CommandPalette.Visible then
+            Library.CommandPalette:Refresh()
+        end
+        return Command
+    end
+
+    Window.AddCommand = Window.RegisterCommand
+
+    function Window:RevealElement(Element: { [string]: any }, Groupbox: { [string]: any })
+        setthreadidentity(8)
+        if Element.Destroyed or Groupbox.Destroyed then
+            return
+        end
+
+        local Tab = Groupbox.Tab
+        if Tab and typeof(Tab.Show) == "function" then
+            Tab:Show()
+        end
+        if Groupbox.SubTab and typeof(Groupbox.SubTab.Show) == "function" then
+            Groupbox.SubTab:Show()
+        end
+        if Groupbox.Type == "TabboxTab" and typeof(Groupbox.Show) == "function" then
+            Groupbox:Show()
+        elseif Groupbox.Type == "Groupbox" and Groupbox.Collapsed then
+            Groupbox:SetCollapsed(false)
+        end
+
+        task.defer(function()
+            setthreadidentity(8)
+            if Element.Destroyed or not Element.Holder or not Element.Holder.Parent or not Tab then
+                return
+            end
+
+            for _, Side in Tab.Sides or {} do
+                if Element.Holder:IsDescendantOf(Side) then
+                    local Offset = Element.Holder.AbsolutePosition.Y - Side.AbsolutePosition.Y + Side.CanvasPosition.Y - 12
+                    Side.CanvasPosition = Vector2.new(Side.CanvasPosition.X, math.max(0, Offset))
+                    break
+                end
+            end
+        end)
+    end
+
+    function Window:CreateCommandPalette(): { [string]: any }?
+        setthreadidentity(8)
+        if WindowInfo.CommandPalette == false then
+            return nil
+        elseif Library.CommandPalette and not Library.CommandPalette.Destroyed then
+            return Library.CommandPalette
+        end
+
+        local Overlay = New("TextButton", {
+            AutoButtonColor = false,
+            BackgroundColor3 = "DarkColor",
+            BackgroundTransparency = 0.35,
+            Size = UDim2.fromScale(1, 1),
+            Text = "",
+            Visible = false,
+            ZIndex = 100,
+            Parent = MainFrame,
+        })
+        local Panel = New("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundColor3 = "BackgroundColor",
+            Position = UDim2.fromScale(0.5, 0.5),
+            Size = UDim2.new(0.76, 0, 0, 380),
+            ZIndex = 101,
+            Parent = Overlay,
+        })
+        New("UISizeConstraint", {
+            MaxSize = Vector2.new(580, 380),
+            MinSize = Vector2.new(340, 300),
+            Parent = Panel,
+        })
+        table.insert(Library.Corners, New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = Panel,
+        }))
+        Library:AddOutline(Panel)
+
+        local Header = New("Frame", {
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 54),
+            ZIndex = 102,
+            Parent = Panel,
+        })
+        Library:MakeLine(Header, {
+            AnchorPoint = Vector2.new(0, 1),
+            Position = UDim2.fromScale(0, 1),
+            Size = UDim2.new(1, 0, 0, 1),
+            ZIndex = 102,
+        })
+        local SearchIcon = Library:GetCustomIcon("search")
+        if SearchIcon then
+            New("ImageLabel", {
+                Image = SearchIcon.Url,
+                ImageColor3 = "FontColor",
+                ImageRectOffset = SearchIcon.ImageRectOffset,
+                ImageRectSize = SearchIcon.ImageRectSize,
+                ImageTransparency = 0.4,
+                Position = UDim2.fromOffset(15, 15),
+                Size = UDim2.fromOffset(24, 24),
+                ZIndex = 103,
+                Parent = Header,
+            })
+        end
+        local QueryBox = New("TextBox", {
+            BackgroundTransparency = 1,
+            ClearTextOnFocus = false,
+            PlaceholderText = "Search commands and features...",
+            Position = UDim2.fromOffset(49, 0),
+            Size = UDim2.new(1, -104, 1, 0),
+            Text = "",
+            TextSize = 16,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 103,
+            Parent = Header,
+        })
+        local ShortcutLabel = New("TextLabel", {
+            AnchorPoint = Vector2.new(1, 0.5),
+            BackgroundColor3 = "MainColor",
+            Position = UDim2.new(1, -12, 0.5, 0),
+            Size = UDim2.fromOffset(42, 24),
+            Text = "ESC",
+            TextSize = 11,
+            TextTransparency = 0.35,
+            ZIndex = 103,
+            Parent = Header,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+            Parent = ShortcutLabel,
+        })
+        New("UIStroke", {
+            Color = "OutlineColor",
+            Parent = ShortcutLabel,
+        })
+
+        local Results = New("ScrollingFrame", {
+            AutomaticCanvasSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1,
+            CanvasSize = UDim2.fromScale(0, 0),
+            Position = UDim2.fromOffset(0, 55),
+            ScrollBarThickness = 2,
+            Size = UDim2.new(1, 0, 1, -84),
+            ZIndex = 102,
+            Parent = Panel,
+        })
+        New("UIListLayout", {
+            Padding = UDim.new(0, 3),
+            Parent = Results,
+        })
+        New("UIPadding", {
+            PaddingBottom = UDim.new(0, 6),
+            PaddingLeft = UDim.new(0, 6),
+            PaddingRight = UDim.new(0, 6),
+            PaddingTop = UDim.new(0, 6),
+            Parent = Results,
+        })
+
+        local EmptyLabel = New("TextLabel", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundTransparency = 1,
+            Position = UDim2.fromScale(0.5, 0.55),
+            Size = UDim2.new(1, -30, 0, 50),
+            Text = "No matching commands",
+            TextSize = 14,
+            TextTransparency = 0.5,
+            Visible = false,
+            ZIndex = 103,
+            Parent = Panel,
+        })
+        local Footer = New("TextLabel", {
+            AnchorPoint = Vector2.new(0, 1),
+            BackgroundColor3 = "MainColor",
+            Position = UDim2.fromScale(0, 1),
+            Size = UDim2.new(1, 0, 0, 29),
+            Text = "↑↓ Navigate     Enter Run     Esc Close",
+            TextSize = 11,
+            TextTransparency = 0.5,
+            ZIndex = 102,
+            Parent = Panel,
+        })
+        table.insert(Library.Corners, New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = Footer,
+        }))
+
+        local Palette = {
+            Type = "CommandPalette",
+            Container = Overlay,
+            Panel = Panel,
+            QueryBox = QueryBox,
+            Results = Results,
+            ResultButtons = {},
+            FilteredCommands = {},
+            SelectedIndex = 1,
+            Visible = false,
+            Destroyed = false,
+        }
+
+        local function GetCommandSearchText(Command: { [string]: any }): string
+            local Keywords = Command.Keywords
+            local KeywordText = ""
+            if typeof(Keywords) == "string" then
+                KeywordText = Keywords
+            elseif typeof(Keywords) == "table" then
+                KeywordText = table.concat(Keywords, " ")
+            end
+            return string.lower(`{Command.Name} {Command.Description} {KeywordText} {table.concat(Command.Badges or {}, " ")}`)
+        end
+
+        function Palette:Execute(Index: number?)
+            setthreadidentity(8)
+            local Command = Palette.FilteredCommands[Index or Palette.SelectedIndex]
+            if not Command or Command.Disabled or Command.Destroyed then
+                return
+            end
+
+            Palette:Close()
+            task.defer(function()
+                setthreadidentity(8)
+                Library:SafeCallback(Command.Action, Command)
+            end)
+        end
+
+        function Palette:SetSelected(Index: number)
+            setthreadidentity(8)
+            local Count = #Palette.FilteredCommands
+            if Count == 0 then
+                Palette.SelectedIndex = 0
+                return
+            end
+
+            Palette.SelectedIndex = (Index - 1) % Count + 1
+            for ButtonIndex, Button in Palette.ResultButtons do
+                local Selected = ButtonIndex == Palette.SelectedIndex
+                Button.BackgroundTransparency = Selected and 0 or 1
+                Button.BackgroundColor3 = Selected and Library.Scheme.MainColor or Library.Scheme.BackgroundColor
+                Library.Registry[Button].BackgroundColor3 = Selected and "MainColor" or "BackgroundColor"
+            end
+
+            local SelectedButton = Palette.ResultButtons[Palette.SelectedIndex]
+            if SelectedButton then
+                local Top = SelectedButton.AbsolutePosition.Y - Results.AbsolutePosition.Y + Results.CanvasPosition.Y
+                local Bottom = Top + SelectedButton.AbsoluteSize.Y
+                if Top < Results.CanvasPosition.Y then
+                    Results.CanvasPosition = Vector2.new(0, Top)
+                elseif Bottom > Results.CanvasPosition.Y + Results.AbsoluteSize.Y then
+                    Results.CanvasPosition = Vector2.new(0, Bottom - Results.AbsoluteSize.Y)
+                end
+            end
+        end
+
+        function Palette:Refresh()
+            setthreadidentity(8)
+            if Palette.Destroyed then
+                return
+            end
+
+            for _, Button in Palette.ResultButtons do
+                Button:Destroy()
+            end
+            table.clear(Palette.ResultButtons)
+            table.clear(Palette.FilteredCommands)
+
+            local Query = string.lower(Trim(QueryBox.Text))
+            local RankedCommands = {}
+
+            for Index = #Library.Commands, 1, -1 do
+                local Command = Library.Commands[Index]
+                if Command.Destroyed or (Command.Element and Command.Element.Destroyed) then
+                    table.remove(Library.Commands, Index)
+                    continue
+                elseif not Command.Visible then
+                    continue
+                end
+
+                local SearchText = GetCommandSearchText(Command)
+                local MatchPosition = if Query == "" then 1 else string.find(SearchText, Query, 1, true)
+                if not MatchPosition then
+                    continue
+                end
+
+                local Name = string.lower(Command.Name)
+                local Score = if Query == "" then 3 elseif string.sub(Name, 1, #Query) == Query then 0 elseif string.find(Name, Query, 1, true) then 1 else 2
+                table.insert(RankedCommands, { Command = Command, Score = Score, Order = Index })
+            end
+
+            table.sort(RankedCommands, function(First, Second)
+                if First.Score ~= Second.Score then
+                    return First.Score < Second.Score
+                end
+                return First.Order < Second.Order
+            end)
+
+            local MaximumResults = math.max(1, WindowInfo.CommandPaletteMaxResults)
+            for Index = 1, math.min(#RankedCommands, MaximumResults) do
+                local Command = RankedCommands[Index].Command
+                table.insert(Palette.FilteredCommands, Command)
+
+                local Button = New("TextButton", {
+                    AutoButtonColor = false,
+                    BackgroundColor3 = "BackgroundColor",
+                    BackgroundTransparency = 1,
+                    Size = UDim2.new(1, 0, 0, 48),
+                    Text = "",
+                    ZIndex = 103,
+                    Parent = Results,
+                })
+                table.insert(Library.Corners, New("UICorner", {
+                    CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+                    Parent = Button,
+                }))
+                local NameLabel = New("TextLabel", {
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromOffset(12, 5),
+                    Size = UDim2.new(1, -24, 0, 20),
+                    Text = Library:FormatFeatureText(Command.Name, Command.Badges),
+                    TextSize = 14,
+                    TextTransparency = Command.Disabled and 0.65 or 0,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    ZIndex = 104,
+                    Parent = Button,
+                })
+                New("TextLabel", {
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromOffset(12, 25),
+                    Size = UDim2.new(1, -24, 0, 17),
+                    Text = Command.Description,
+                    TextSize = 11,
+                    TextTransparency = 0.55,
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    ZIndex = 104,
+                    Parent = Button,
+                })
+                if Command.Disabled then
+                    NameLabel.TextTransparency = 0.65
+                end
+
+                Library:GiveSignal(Button.MouseButton1Click:Connect(function()
+                    setthreadidentity(8)
+                    Palette:Execute(Index)
+                end))
+                Library:GiveSignal(Button.MouseEnter:Connect(function()
+                    setthreadidentity(8)
+                    Palette:SetSelected(Index)
+                end))
+                Palette.ResultButtons[Index] = Button
+            end
+
+            EmptyLabel.Visible = #Palette.FilteredCommands == 0
+            Palette:SetSelected(math.clamp(Palette.SelectedIndex, 1, math.max(#Palette.FilteredCommands, 1)))
+        end
+
+        function Palette:Open()
+            setthreadidentity(8)
+            if Palette.Destroyed or Palette.Visible then
+                return
+            end
+
+            if not Library.Toggled then
+                Window:Toggle(true)
+            end
+            Palette.Visible = true
+            Overlay.Visible = true
+            QueryBox.Text = ""
+            Palette.SelectedIndex = 1
+            Palette:Refresh()
+            task.defer(QueryBox.CaptureFocus, QueryBox)
+        end
+
+        function Palette:Close()
+            setthreadidentity(8)
+            if not Palette.Visible then
+                return
+            end
+
+            Palette.Visible = false
+            QueryBox:ReleaseFocus()
+            Overlay.Visible = false
+        end
+
+        function Palette:Toggle()
+            setthreadidentity(8)
+            if Palette.Visible then
+                Palette:Close()
+            else
+                Palette:Open()
+            end
+        end
+
+        function Palette:Destroy()
+            setthreadidentity(8)
+            if Palette.Destroyed then
+                return
+            end
+            Palette.Destroyed = true
+            Overlay:Destroy()
+            Library.CommandPalette = nil
+        end
+
+        Library:GiveSignal(QueryBox:GetPropertyChangedSignal("Text"):Connect(function()
+            setthreadidentity(8)
+            Palette.SelectedIndex = 1
+            Palette:Refresh()
+        end))
+        Library:GiveSignal(UserInputService.InputBegan:Connect(function(Input: InputObject, Processed: boolean)
+            setthreadidentity(8)
+            if Library.Unloaded then
+                return
+            end
+
+            if Palette.Visible then
+                if Input.KeyCode == Enum.KeyCode.Escape then
+                    Palette:Close()
+                elseif Input.KeyCode == Enum.KeyCode.Up then
+                    Palette:SetSelected(Palette.SelectedIndex - 1)
+                elseif Input.KeyCode == Enum.KeyCode.Down then
+                    Palette:SetSelected(Palette.SelectedIndex + 1)
+                elseif Input.KeyCode == Enum.KeyCode.Return or Input.KeyCode == Enum.KeyCode.KeypadEnter then
+                    Palette:Execute()
+                end
+                return
+            end
+
+            if Processed or Input.KeyCode ~= WindowInfo.CommandPaletteKeybind then
+                return
+            end
+
+            local ControlPressed = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+                or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
+            if not WindowInfo.CommandPaletteRequireControl or ControlPressed then
+                Palette:Open()
+            end
+        end))
+        Library:GiveSignal(Overlay.MouseButton1Click:Connect(function()
+            setthreadidentity(8)
+            local MousePosition = UserInputService:GetMouseLocation()
+            local PanelPosition = Panel.AbsolutePosition
+            local PanelSize = Panel.AbsoluteSize
+            local InsidePanel = MousePosition.X >= PanelPosition.X
+                and MousePosition.X <= PanelPosition.X + PanelSize.X
+                and MousePosition.Y >= PanelPosition.Y
+                and MousePosition.Y <= PanelPosition.Y + PanelSize.Y
+            if not InsidePanel then
+                Palette:Close()
+            end
+        end))
+
+        Library.CommandPalette = Palette
+        return Palette
+    end
+
+    function Window:OpenCommandPalette()
+        setthreadidentity(8)
+        local Palette = Window:CreateCommandPalette()
+        if Palette then
+            Palette:Open()
+        end
+    end
+
+    function Window:CloseCommandPalette()
+        setthreadidentity(8)
+        if Library.CommandPalette then
+            Library.CommandPalette:Close()
+        end
+    end
+
     function Window:SetCornerRadius(Radius: number)
         setthreadidentity(8)
         assert(typeof(Radius) == "number", "Expected number for Radius got: " .. typeof(Radius))
@@ -9610,6 +11283,9 @@ function Library:CreateWindow(WindowInfo)
 
             for _, Tabbox in Tab.Tabboxes do
                 Tabbox:UpdateCorners()
+            end
+            for _, SubTab in Tab.SubTabOrder or {} do
+                SubTab:UpdateCorners()
             end
         end
     end
@@ -9671,6 +11347,8 @@ function Library:CreateWindow(WindowInfo)
             Button.Padding.PaddingTop = UDim.new(0, IsCompact and 6 or 11)
             Button.Icon.SizeConstraint = IsCompact and Enum.SizeConstraint.RelativeXY or Enum.SizeConstraint.RelativeYY
         end
+
+        UpdateKeyStatusLayout()
     end
 
     function Window:IsSidebarCompacted()
@@ -9698,6 +11376,7 @@ function Library:CreateWindow(WindowInfo)
         RightWrapper.Size = UDim2.new(1, -Width - 57 - 1, 1, -16)
         Tabs.Size = UDim2.new(0, Width, 1, -70)
         Container.Size = UDim2.new(1, -Width - 1, 1, -70)
+        UpdateKeyStatusLayout()
 
         if WindowInfo.EnableCompacting then
             ApplyCompact()
@@ -9893,6 +11572,34 @@ function Library:CreateWindow(WindowInfo)
             end
         end
 
+        -- Sub Tabs
+        local SubTabHolder = New("Frame", {
+            BackgroundColor3 = "BackgroundColor",
+            ClipsDescendants = true,
+            Position = UDim2.fromOffset(2, 2),
+            Size = UDim2.new(1, -4, 0, 34),
+            Visible = false,
+            ZIndex = 3,
+            Parent = TabContainer,
+        })
+        local SubTabHolderCorner = New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = SubTabHolder,
+        })
+        table.insert(Library.Corners, SubTabHolderCorner)
+        Library:AddOutline(SubTabHolder)
+
+        local SubTabButtons = New("Frame", {
+            BackgroundTransparency = 1,
+            Size = UDim2.fromScale(1, 1),
+            Parent = SubTabHolder,
+        })
+        New("UIListLayout", {
+            FillDirection = Enum.FillDirection.Horizontal,
+            HorizontalFlex = Enum.UIFlexAlignment.Fill,
+            Parent = SubTabButtons,
+        })
+
         --// Warning Box \\--
         local WarningBoxHolder = New("Frame", {
             AutomaticSize = Enum.AutomaticSize.Y,
@@ -9900,6 +11607,7 @@ function Library:CreateWindow(WindowInfo)
             Position = UDim2.fromOffset(0, 7),
             Size = UDim2.fromScale(1, 0),
             Visible = false,
+            ZIndex = 3,
             Parent = TabContainer,
         })
 
@@ -9982,6 +11690,7 @@ function Library:CreateWindow(WindowInfo)
 
         --// Tab Table \\--
         local Tab = {
+            Name = Name,
             Description = Description,
 
             Connections = {},
@@ -9989,10 +11698,18 @@ function Library:CreateWindow(WindowInfo)
 
             Window = Window,
             Canvas = TabCanvas,
+            RootSides = {
+                TabLeft,
+                TabRight,
+            },
             Sides = {
                 TabLeft,
                 TabRight,
             },
+            SubTabs = {},
+            SubTabOrder = {},
+            ActiveSubTab = nil,
+            SubTabHolder = SubTabHolder,
             WarningBox = {
                 IsNormal = false,
                 LockSize = false,
@@ -10086,7 +11803,11 @@ function Library:CreateWindow(WindowInfo)
 
         function Tab:RefreshSides()
             setthreadidentity(8)
-            local Offset = WarningBoxHolder.Visible and WarningBox.Size.Y.Offset + 8 or 0
+            local SubTabOffset = SubTabHolder.Visible and 38 or 0
+            local WarningOffset = WarningBoxHolder.Visible and WarningBox.Size.Y.Offset + 8 or 0
+            local Offset = SubTabOffset + WarningOffset
+
+            WarningBoxHolder.Position = UDim2.fromOffset(0, SubTabOffset + 7)
             for _, Side in Tab.Sides do
                 Side.Position = UDim2.new(Side.Position.X.Scale, 0, 0, Offset)
                 Side.Size = UDim2.new(0.5, -3, 1, -Offset)
@@ -10119,15 +11840,411 @@ function Library:CreateWindow(WindowInfo)
             Tab:RefreshSides()
         end
 
+        local function GetVisibleSubTabBoundaries()
+            local FirstSubTab
+            local LastSubTab
+
+            for _, SubTab in Tab.SubTabOrder do
+                if SubTab.Destroyed or not SubTab.Visible then
+                    continue
+                end
+
+                if not FirstSubTab or SubTab.Button.LayoutOrder < FirstSubTab.Button.LayoutOrder then
+                    FirstSubTab = SubTab
+                end
+                if not LastSubTab or SubTab.Button.LayoutOrder >= LastSubTab.Button.LayoutOrder then
+                    LastSubTab = SubTab
+                end
+            end
+
+            return FirstSubTab, LastSubTab
+        end
+
+        function Tab:RefreshSubTabs()
+            setthreadidentity(8)
+            if Tab.Destroyed then
+                return
+            end
+
+            local FirstSubTab, LastSubTab = GetVisibleSubTabBoundaries()
+            local HasVisibleSubTabs = FirstSubTab ~= nil
+
+            SubTabHolder.Visible = HasVisibleSubTabs
+            Tab.RootSides[1].Visible = not HasVisibleSubTabs
+            Tab.RootSides[2].Visible = not HasVisibleSubTabs
+
+            if not HasVisibleSubTabs then
+                if Tab.ActiveSubTab then
+                    Tab.ActiveSubTab:Hide()
+                end
+                Tab.Sides = Tab.RootSides
+            elseif not Tab.ActiveSubTab or not Tab.ActiveSubTab.Visible or Tab.ActiveSubTab.Destroyed then
+                FirstSubTab:Show()
+            end
+
+            for _, SubTab in Tab.SubTabOrder do
+                if not SubTab.Destroyed then
+                    SubTab:UpdateCorners(FirstSubTab, LastSubTab)
+                end
+            end
+            Tab:RefreshSides()
+        end
+
+        function Tab:AddSubTab(...)
+            setthreadidentity(8)
+            local SubTabInfo
+
+            if select("#", ...) == 1 and typeof(...) == "table" then
+                SubTabInfo = select(1, ...)
+            else
+                SubTabInfo = {
+                    Name = select(1, ...),
+                    Icon = select(2, ...),
+                    Order = select(3, ...),
+                }
+            end
+
+            local SubTabName = SubTabInfo.Name or "Sub Tab"
+            local SubTabIcon = Library:GetCustomIcon(SubTabInfo.Icon)
+            local SubTabIndex = #Tab.SubTabOrder + 1
+            local StorageIndex = SubTabName
+
+            if Tab.SubTabs[StorageIndex] then
+                StorageIndex = `{SubTabName} {SubTabIndex}`
+            end
+
+            local Button = New("TextButton", {
+                BackgroundColor3 = "MainColor",
+                BackgroundTransparency = 0,
+                LayoutOrder = SubTabInfo.Order or SubTabIndex,
+                Size = UDim2.fromOffset(0, 34),
+                Text = "",
+                ZIndex = 3,
+                Parent = SubTabButtons,
+            })
+            local ButtonCorner = New("UICorner", {
+                CornerRadius = UDim.new(0, 0),
+                Parent = Button,
+            })
+            table.insert(Library.SpecificCorners, ButtonCorner)
+
+            local ButtonContent = New("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                Position = UDim2.fromScale(0.5, 0.5),
+                Size = UDim2.fromOffset(0, 18),
+                Parent = Button,
+            })
+            New("UIListLayout", {
+                FillDirection = Enum.FillDirection.Horizontal,
+                HorizontalAlignment = Enum.HorizontalAlignment.Center,
+                Padding = UDim.new(0, 7),
+                VerticalAlignment = Enum.VerticalAlignment.Center,
+                Parent = ButtonContent,
+            })
+
+            local ButtonIcon
+
+            if SubTabIcon then
+                ButtonIcon = New("ImageLabel", {
+                    BackgroundTransparency = 1,
+                    Image = SubTabIcon.Url,
+                    ImageColor3 = SubTabIcon.Custom and "WhiteColor" or "AccentColor",
+                    ImageRectOffset = SubTabIcon.ImageRectOffset,
+                    ImageRectSize = SubTabIcon.ImageRectSize,
+                    ImageTransparency = 0.5,
+                    Size = UDim2.fromOffset(18, 18),
+                    ZIndex = 3,
+                    Parent = ButtonContent,
+                })
+            end
+
+            local ButtonLabel = New("TextLabel", {
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                Size = UDim2.fromOffset(0, 18),
+                Text = SubTabName,
+                TextSize = 15,
+                TextTransparency = 0.5,
+                ZIndex = 3,
+                Parent = ButtonContent,
+            })
+            local Line = Library:MakeLine(Button, {
+                AnchorPoint = Vector2.new(0, 1),
+                Position = UDim2.fromScale(0, 1),
+                Size = UDim2.new(1, 0, 0, 1),
+            })
+            local ActiveLine = New("Frame", {
+                AnchorPoint = Vector2.new(0, 1),
+                BackgroundColor3 = "AccentColor",
+                BorderSizePixel = 0,
+                Position = UDim2.fromScale(0, 1),
+                Size = UDim2.new(1, 0, 0, 2),
+                Visible = false,
+                ZIndex = 4,
+                Parent = Button,
+            })
+
+            local Canvas = New("CanvasGroup", {
+                BackgroundTransparency = 1,
+                ClipsDescendants = true,
+                GroupTransparency = 0,
+                Size = UDim2.fromScale(1, 1),
+                Visible = false,
+                Parent = TabContainer,
+            })
+
+            local function CreateSide(IsRight: boolean)
+                local Side = New("ScrollingFrame", {
+                    AnchorPoint = IsRight and Vector2.new(1, 0) or Vector2.zero,
+                    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+                    BackgroundTransparency = 1,
+                    CanvasSize = UDim2.fromScale(0, 0),
+                    Position = IsRight and UDim2.fromScale(1, 0) or UDim2.fromScale(0, 0),
+                    ScrollBarImageTransparency = 1,
+                    ScrollBarThickness = 0,
+                    Size = UDim2.new(0.5, -3, 1, 0),
+                    Parent = Canvas,
+                })
+                New("UIListLayout", {
+                    Padding = UDim.new(0, 2),
+                    Parent = Side,
+                })
+                New("UIPadding", {
+                    PaddingBottom = UDim.new(0, 2),
+                    PaddingLeft = UDim.new(0, 2),
+                    PaddingRight = UDim.new(0, 2),
+                    PaddingTop = UDim.new(0, 2),
+                    Parent = Side,
+                })
+                New("Frame", {
+                    BackgroundTransparency = 1,
+                    LayoutOrder = -1,
+                    Parent = Side,
+                })
+                New("Frame", {
+                    BackgroundTransparency = 1,
+                    LayoutOrder = 1,
+                    Parent = Side,
+                })
+
+                return Side
+            end
+
+            local SubTab = {
+                Type = "SubTab",
+                Name = SubTabName,
+                StorageIndex = StorageIndex,
+                Connections = {},
+                Destroyed = false,
+                Visible = true,
+                Button = Button,
+                ButtonCorner = ButtonCorner,
+                Canvas = Canvas,
+                Groupboxes = {},
+                Tabboxes = {},
+                Tab = Tab,
+                Sides = {
+                    CreateSide(false),
+                    CreateSide(true),
+                },
+            }
+
+            function SubTab:UpdateCorners(FirstSubTab, LastSubTab)
+                setthreadidentity(8)
+                ButtonCorner.CornerRadius = UDim.new(0, 0)
+            end
+
+            function SubTab:Show()
+                setthreadidentity(8)
+                if SubTab.Destroyed or not SubTab.Visible or Tab.ActiveSubTab == SubTab then
+                    return
+                end
+                if Tab.ActiveSubTab then
+                    Tab.ActiveSubTab:Hide()
+                end
+
+                Button.BackgroundTransparency = 1
+                ButtonLabel.TextTransparency = 0
+                if ButtonIcon then
+                    ButtonIcon.ImageTransparency = 0
+                end
+                Line.Visible = true
+                ActiveLine.Visible = true
+
+                Tab.Sides = SubTab.Sides
+                Tab.ActiveSubTab = SubTab
+                Library:PlayTabAnimation(Canvas, true)
+                Tab:RefreshSides()
+
+                if Library.Searching then
+                    Library:UpdateSearch(Library.SearchText)
+                end
+            end
+
+            function SubTab:Hide()
+                setthreadidentity(8)
+                if SubTab.Destroyed then
+                    return
+                end
+
+                Button.BackgroundTransparency = 0
+                ButtonLabel.TextTransparency = 0.5
+                if ButtonIcon then
+                    ButtonIcon.ImageTransparency = 0.5
+                end
+                Line.Visible = true
+                ActiveLine.Visible = false
+                Library:PlayTabAnimation(Canvas, false)
+
+                if Tab.ActiveSubTab == SubTab then
+                    Tab.ActiveSubTab = nil
+                end
+            end
+
+            function SubTab:SetVisible(Visible: boolean)
+                setthreadidentity(8)
+                SubTab.Visible = Visible
+                Button.Visible = Visible
+
+                if not Visible and Tab.ActiveSubTab == SubTab then
+                    SubTab:Hide()
+                end
+                Tab:RefreshSubTabs()
+            end
+
+            function SubTab:AddGroupbox(Info)
+                setthreadidentity(8)
+                Info = table.clone(Info)
+                Info.SubTab = SubTab
+                Info.Parent = Info.Side == 1 and SubTab.Sides[1] or SubTab.Sides[2]
+                Info.StorageName = `{StorageIndex}:{#SubTab.Groupboxes + 1}:{Info.Name}`
+
+                return Tab:AddGroupbox(Info)
+            end
+
+            function SubTab:AddLeftGroupbox(Name, IconName, Visible, Collapsed, DisableCollapsing)
+                setthreadidentity(8)
+                return SubTab:AddGroupbox({ Side = 1, Name = Name, IconName = IconName, Visible = Visible, Collapsed = Collapsed, DisableCollapsing = DisableCollapsing })
+            end
+
+            function SubTab:AddRightGroupbox(Name, IconName, Visible, Collapsed, DisableCollapsing)
+                setthreadidentity(8)
+                return SubTab:AddGroupbox({ Side = 2, Name = Name, IconName = IconName, Visible = Visible, Collapsed = Collapsed, DisableCollapsing = DisableCollapsing })
+            end
+
+            function SubTab:AddTabbox(Info)
+                setthreadidentity(8)
+                Info = table.clone(Info)
+                Info.SubTab = SubTab
+                Info.Parent = Info.Side == 1 and SubTab.Sides[1] or SubTab.Sides[2]
+                Info.StorageName = `{StorageIndex}:Tabbox:{#SubTab.Tabboxes + 1}:{tostring(Info.Name)}`
+
+                return Tab:AddTabbox(Info)
+            end
+
+            function SubTab:AddLeftTabbox(Name)
+                setthreadidentity(8)
+                return SubTab:AddTabbox({ Side = 1, Name = Name })
+            end
+
+            function SubTab:AddRightTabbox(Name)
+                setthreadidentity(8)
+                return SubTab:AddTabbox({ Side = 2, Name = Name })
+            end
+
+            function SubTab:Destroy()
+                setthreadidentity(8)
+                if SubTab.Destroyed then
+                    return
+                end
+
+                SubTab.Destroyed = true
+
+                for _, Connection in SubTab.Connections do
+                    Connection:Disconnect()
+                end
+                table.clear(SubTab.Connections)
+
+                for _, Tabbox in SubTab.Tabboxes do
+                    for TabboxIndex, StoredTabbox in Tab.Tabboxes do
+                        if StoredTabbox == Tabbox then
+                            Tab.Tabboxes[TabboxIndex] = nil
+                            break
+                        end
+                    end
+                    Tabbox:Destroy()
+                end
+                table.clear(SubTab.Tabboxes)
+
+                for _, Groupbox in SubTab.Groupboxes do
+                    for GroupboxIndex, StoredGroupbox in Tab.Groupboxes do
+                        if StoredGroupbox == Groupbox then
+                            Tab.Groupboxes[GroupboxIndex] = nil
+                            break
+                        end
+                    end
+                    Groupbox:Destroy()
+                end
+                table.clear(SubTab.Groupboxes)
+
+                local OrderIndex = table.find(Tab.SubTabOrder, SubTab)
+                if OrderIndex then
+                    table.remove(Tab.SubTabOrder, OrderIndex)
+                end
+                Tab.SubTabs[StorageIndex] = nil
+
+                if Tab.ActiveSubTab == SubTab then
+                    Tab.ActiveSubTab = nil
+                end
+
+                local CornerIndex = table.find(Library.SpecificCorners, ButtonCorner)
+                if CornerIndex then
+                    table.remove(Library.SpecificCorners, CornerIndex)
+                end
+                Canvas:Destroy()
+                Button:Destroy()
+                Tab:RefreshSubTabs()
+            end
+
+            table.insert(SubTab.Connections, Button.MouseEnter:Connect(function()
+                setthreadidentity(8)
+                if Tab.ActiveSubTab ~= SubTab then
+                    TweenService:Create(ButtonLabel, Library.TweenInfo, { TextTransparency = 0.25 }):Play()
+                    if ButtonIcon then
+                        TweenService:Create(ButtonIcon, Library.TweenInfo, { ImageTransparency = 0.25 }):Play()
+                    end
+                end
+            end))
+            table.insert(SubTab.Connections, Button.MouseLeave:Connect(function()
+                setthreadidentity(8)
+                if Tab.ActiveSubTab ~= SubTab then
+                    TweenService:Create(ButtonLabel, Library.TweenInfo, { TextTransparency = 0.5 }):Play()
+                    if ButtonIcon then
+                        TweenService:Create(ButtonIcon, Library.TweenInfo, { ImageTransparency = 0.5 }):Play()
+                    end
+                end
+            end))
+            table.insert(SubTab.Connections, Button.MouseButton1Click:Connect(SubTab.Show))
+
+            Tab.SubTabs[StorageIndex] = SubTab
+            table.insert(Tab.SubTabOrder, SubTab)
+            Tab:RefreshSubTabs()
+
+            return SubTab, StorageIndex
+        end
+
         local function AddTabbox(self, Info)
             setthreadidentity(8)
             local ParentObj = self
+            local OwningSubTab = Info.SubTab or ParentObj.SubTab
 
             local BoxHolder = New("Frame", {
                 AutomaticSize = Enum.AutomaticSize.Y,
                 BackgroundTransparency = 1,
                 Size = UDim2.fromScale(1, 0),
-                Parent = if ParentObj.Type == "Groupbox" then ParentObj.Container else (Info.Side == 1 and TabLeft or TabRight),
+                Parent = if ParentObj.Type == "Groupbox" then ParentObj.Container else (Info.Parent or (Info.Side == 1 and TabLeft or TabRight)),
             })
             New("UIListLayout", {
                 Padding = UDim.new(0, 6),
@@ -10289,6 +12406,8 @@ function Library:CreateWindow(WindowInfo)
                 })
 
                 local Tab = {
+                    Type = "TabboxTab",
+                    Name = Name,
                     Connections = {},
                     Destroyed = false,
 
@@ -10297,6 +12416,7 @@ function Library:CreateWindow(WindowInfo)
                     ButtonCorner = ButtonCorner,
 
                     Tab = Tab,
+                    SubTab = OwningSubTab,
                     Elements = {},
                     DependencyBoxes = {},
                 }
@@ -10408,6 +12528,9 @@ function Library:CreateWindow(WindowInfo)
 
             function Tabbox:Destroy()
                 setthreadidentity(8)
+                if Tabbox.Destroyed then
+                    return
+                end
                 Tabbox.Destroyed = true
 
                 if Tabbox.Connections then
@@ -10431,10 +12554,13 @@ function Library:CreateWindow(WindowInfo)
                 end
             end
 
-            if Info.Name then
-                Tab.Tabboxes[Info.Name] = Tabbox
+            if Info.StorageName or Info.Name then
+                Tab.Tabboxes[Info.StorageName or Info.Name] = Tabbox
             else
                 table.insert(Tab.Tabboxes, Tabbox)
+            end
+            if OwningSubTab then
+                table.insert(OwningSubTab.Tabboxes, Tabbox)
             end
 
             return Tabbox
@@ -10458,7 +12584,7 @@ function Library:CreateWindow(WindowInfo)
                 AutomaticSize = Enum.AutomaticSize.Y,
                 BackgroundTransparency = 1,
                 Size = UDim2.fromScale(1, 0),
-                Parent = Info.Side == 1 and TabLeft or TabRight,
+                Parent = Info.Parent or (Info.Side == 1 and TabLeft or TabRight),
             })
             New("UIListLayout", {
                 Padding = UDim.new(0, 6),
@@ -10563,6 +12689,7 @@ function Library:CreateWindow(WindowInfo)
 
             local Groupbox = {
                 Type = "Groupbox",
+                Name = Info.Name,
 
                 Connections = {},
                 Destroyed = false,
@@ -10575,6 +12702,7 @@ function Library:CreateWindow(WindowInfo)
                 Container = GroupboxContainer,
 
                 Tab = Tab,
+                SubTab = Info.SubTab,
                 DependencyBoxes = {},
                 Elements = {}
             }
@@ -10733,7 +12861,10 @@ function Library:CreateWindow(WindowInfo)
             setmetatable(Groupbox, BaseGroupbox)
 
             Groupbox:Resize()
-            Tab.Groupboxes[Info.Name] = Groupbox
+            Tab.Groupboxes[Info.StorageName or Info.Name] = Groupbox
+            if Info.SubTab then
+                table.insert(Info.SubTab.Groupboxes, Groupbox)
+            end
 
             if Info.Visible == false then
                 Groupbox:Hide()
@@ -10848,11 +12979,26 @@ function Library:CreateWindow(WindowInfo)
             setthreadidentity(8)
             Tab.Destroyed = true
 
+            local HolderCornerIndex = table.find(Library.Corners, SubTabHolderCorner)
+            if HolderCornerIndex then
+                table.remove(Library.Corners, HolderCornerIndex)
+            end
+
+            if Tab.Command then
+                Tab.Command:Destroy()
+            end
+
             if Tab.Connections then
                 for _, Connection in Tab.Connections do
                     Connection:Disconnect()
                 end
             end
+
+            for Index = #Tab.SubTabOrder, 1, -1 do
+                Tab.SubTabOrder[Index]:Destroy()
+            end
+            table.clear(Tab.SubTabs)
+            table.clear(Tab.SubTabOrder)
 
             for _, Groupbox in Tab.Groupboxes do
                 if Groupbox.Destroy then
@@ -10910,6 +13056,17 @@ function Library:CreateWindow(WindowInfo)
         TabButton.MouseButton1Click:Connect(Tab.Show)
 
         Library.Tabs[Name] = Tab
+
+        Tab.Command = Window:RegisterCommand({
+            Id = `Tab:{Name}`,
+            Name = `Open {Name}`,
+            Description = Description or "Navigate to tab",
+            Keywords = { Name, "tab", "navigate", "open" },
+            Action = function()
+                setthreadidentity(8)
+                Tab:Show()
+            end,
+        })
 
         return Tab
     end
@@ -11956,6 +14113,16 @@ function Library:CreateWindow(WindowInfo)
             end
         end))
     end
+    if WindowInfo.KeyStatus == true then
+        Window:AddKeyStatus({})
+    elseif typeof(WindowInfo.KeyStatus) == "table" then
+        Window:AddKeyStatus(WindowInfo.KeyStatus)
+    end
+
+    if WindowInfo.CommandPalette then
+        Window:CreateCommandPalette()
+    end
+
     if WindowInfo.EnableCompacting and WindowInfo.SidebarCompacted then
         Window:SetSidebarWidth(WindowInfo.SidebarCompactWidth)
     end
@@ -12795,6 +14962,17 @@ function Library:Unload()
         end
     end
 
+    if Library.CommandPalette and Library.CommandPalette.Destroy then
+        Library:SafeCallback(Library.CommandPalette.Destroy, Library.CommandPalette)
+    end
+
+    for Index = #Library.KeyStatusComponents, 1, -1 do
+        local Component = Library.KeyStatusComponents[Index]
+        if Component and Component.Destroy then
+            Library:SafeCallback(Component.Destroy, Component)
+        end
+    end
+
     --// Destroy elements
     for Index = #Library.Tabs, 1, -1 do
         local Tab = table.remove(Library.Tabs, Index)
@@ -12843,6 +15021,8 @@ function Library:Unload()
     table.clear(Library.DraggableElements)
     table.clear(Library.KeybindToggles)
     table.clear(Library.DependencyBoxes)
+    table.clear(Library.KeyStatusComponents)
+    table.clear(Library.Commands)
 
     table.clear(TransparencyCache)
     table.clear(ActiveTabTweens)
@@ -12852,6 +15032,10 @@ function Library:Unload()
     Library.WindowContainer = nil
     Library.KeybindFrame = nil
     Library.KeybindContainer = nil
+    Library.AnonymousModeToggle = nil
+    Library.AnonymousMode = false
+    Library.Flags.AnonymousMode = false
+    Library.CommandPalette = nil
 
     getgenv().Library = nil
 end

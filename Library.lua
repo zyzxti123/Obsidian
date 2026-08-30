@@ -7652,28 +7652,47 @@ do
                 Parent = Button,
             })
 
-            local UpButton = New("ImageButton", {
+            local UpIcon = Library:GetIcon("arrow-up") or PriorityUpIcon
+            local DownIcon = Library:GetIcon("arrow-down") or PriorityDownIcon
+
+            local UpButton = New("TextButton", {
                 BackgroundTransparency = 1,
-                Image = PriorityUpIcon and PriorityUpIcon.Url or "",
-                ImageColor3 = "FontColor",
-                ImageRectOffset = PriorityUpIcon and PriorityUpIcon.ImageRectOffset or Vector2.zero,
-                ImageRectSize = PriorityUpIcon and PriorityUpIcon.ImageRectSize or Vector2.zero,
                 Size = UDim2.fromOffset(17, 17),
+                Text = "",
                 Visible = false,
-                ZIndex = 2,
+                ZIndex = 3,
                 Parent = Container,
             })
 
-            local DownButton = New("ImageButton", {
+            local UpImage = New("ImageLabel", {
                 BackgroundTransparency = 1,
-                Image = PriorityDownIcon and PriorityDownIcon.Url or "",
+                Image = UpIcon and UpIcon.Url or "",
                 ImageColor3 = "FontColor",
-                ImageRectOffset = PriorityDownIcon and PriorityDownIcon.ImageRectOffset or Vector2.zero,
-                ImageRectSize = PriorityDownIcon and PriorityDownIcon.ImageRectSize or Vector2.zero,
+                ImageRectOffset = UpIcon and UpIcon.ImageRectOffset or Vector2.zero,
+                ImageRectSize = UpIcon and UpIcon.ImageRectSize or Vector2.zero,
+                Size = UDim2.fromScale(1, 1),
+                ZIndex = 4,
+                Parent = UpButton,
+            })
+
+            local DownButton = New("TextButton", {
+                BackgroundTransparency = 1,
                 Size = UDim2.fromOffset(17, 17),
+                Text = "",
                 Visible = false,
-                ZIndex = 2,
+                ZIndex = 3,
                 Parent = Container,
+            })
+
+            local DownImage = New("ImageLabel", {
+                BackgroundTransparency = 1,
+                Image = DownIcon and DownIcon.Url or "",
+                ImageColor3 = "FontColor",
+                ImageRectOffset = DownIcon and DownIcon.ImageRectOffset or Vector2.zero,
+                ImageRectSize = DownIcon and DownIcon.ImageRectSize or Vector2.zero,
+                Size = UDim2.fromScale(1, 1),
+                ZIndex = 4,
+                Parent = DownButton,
             })
 
             Row.Container = Container
@@ -7682,6 +7701,8 @@ do
             Row.Button = Button
             Row.UpButton = UpButton
             Row.DownButton = DownButton
+            Row.UpImage = UpImage
+            Row.DownImage = DownImage
 
             function Row:UpdateButton()
                 setthreadidentity(8)
@@ -7706,8 +7727,8 @@ do
 
                 if Dropdown.Prioritize then
                     local priorityIndex = table.find(Dropdown.Priority, Entry.Value)
-                    UpButton.ImageTransparency = priorityIndex == 1 and 0.8 or 0.35
-                    DownButton.ImageTransparency = priorityIndex == #Dropdown.Priority and 0.8 or 0.35
+                    UpImage.ImageTransparency = priorityIndex == 1 and 0.8 or 0.2
+                    DownImage.ImageTransparency = priorityIndex == #Dropdown.Priority and 0.8 or 0.2
                 end
             end
 

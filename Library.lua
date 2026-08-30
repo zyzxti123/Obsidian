@@ -7417,8 +7417,9 @@ do
 
                 Row.Button.Text = Entry.FormattedValue
 
-                local priorityWidth = Dropdown.Prioritize and 40 or 0
-                local priorityOnLeft = Dropdown.Prioritize and Dropdown.PriorityButtonsPosition == "Left"
+                local priorityEnabled = Info.Multi and Info.Prioritize == true
+                local priorityWidth = priorityEnabled and 40 or 0
+                local priorityOnLeft = priorityEnabled and Dropdown.PriorityButtonsPosition == "Left"
 
                 if Entry.ValueImage then
                     Row.Image.Visible = true
@@ -7434,8 +7435,8 @@ do
                     Row.Button.Position = UDim2.fromOffset(priorityOnLeft and 40 or 0, 0)
                 end
 
-                Row.UpButton.Visible = Dropdown.Prioritize
-                Row.DownButton.Visible = Dropdown.Prioritize
+                Row.UpButton.Visible = priorityEnabled
+                Row.DownButton.Visible = priorityEnabled
                 Row.UpButton.Position = priorityOnLeft and UDim2.fromOffset(2, 2) or UDim2.new(1, -40, 0, 2)
                 Row.DownButton.Position = priorityOnLeft and UDim2.fromOffset(21, 2) or UDim2.new(1, -21, 0, 2)
 
@@ -7654,13 +7655,15 @@ do
 
             local UpIcon = Library:GetIcon("arrow-up") or PriorityUpIcon
             local DownIcon = Library:GetIcon("arrow-down") or PriorityDownIcon
+            local PriorityButtonZIndex = MenuTable.Menu.ZIndex + 2
 
             local UpButton = New("TextButton", {
                 BackgroundTransparency = 1,
                 Size = UDim2.fromOffset(17, 17),
-                Text = "",
+                Text = "↑",
+                TextSize = 14,
                 Visible = false,
-                ZIndex = 3,
+                ZIndex = PriorityButtonZIndex,
                 Parent = Container,
             })
 
@@ -7671,16 +7674,17 @@ do
                 ImageRectOffset = UpIcon and UpIcon.ImageRectOffset or Vector2.zero,
                 ImageRectSize = UpIcon and UpIcon.ImageRectSize or Vector2.zero,
                 Size = UDim2.fromScale(1, 1),
-                ZIndex = 4,
+                ZIndex = PriorityButtonZIndex + 1,
                 Parent = UpButton,
             })
 
             local DownButton = New("TextButton", {
                 BackgroundTransparency = 1,
                 Size = UDim2.fromOffset(17, 17),
-                Text = "",
+                Text = "↓",
+                TextSize = 14,
                 Visible = false,
-                ZIndex = 3,
+                ZIndex = PriorityButtonZIndex,
                 Parent = Container,
             })
 
@@ -7691,7 +7695,7 @@ do
                 ImageRectOffset = DownIcon and DownIcon.ImageRectOffset or Vector2.zero,
                 ImageRectSize = DownIcon and DownIcon.ImageRectSize or Vector2.zero,
                 Size = UDim2.fromScale(1, 1),
-                ZIndex = 4,
+                ZIndex = PriorityButtonZIndex + 1,
                 Parent = DownButton,
             })
 
@@ -7727,8 +7731,13 @@ do
 
                 if Dropdown.Prioritize then
                     local priorityIndex = table.find(Dropdown.Priority, Entry.Value)
-                    UpImage.ImageTransparency = priorityIndex == 1 and 0.8 or 0.2
-                    DownImage.ImageTransparency = priorityIndex == #Dropdown.Priority and 0.8 or 0.2
+                    local upTransparency = priorityIndex == 1 and 0.8 or 0.2
+                    local downTransparency = priorityIndex == #Dropdown.Priority and 0.8 or 0.2
+
+                    UpImage.ImageTransparency = upTransparency
+                    DownImage.ImageTransparency = downTransparency
+                    UpButton.TextTransparency = upTransparency
+                    DownButton.TextTransparency = downTransparency
                 end
             end
 

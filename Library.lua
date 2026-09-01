@@ -1763,7 +1763,7 @@ end
 
 function Library:GetTextBounds(Text: string, Font: Font, Size: number, Width: number?): (number, number)
     setthreadidentity(8)
-    setthreadidentity(8)
+    
     local Params = Instance.new("GetTextBoundsParams")
     Params.Text = Text
     Params.RichText = true
@@ -7440,8 +7440,8 @@ do
 
                 Row.UpButton.Visible = priorityEnabled
                 Row.DownButton.Visible = priorityEnabled
-                Row.UpButton.Position = priorityOnLeft and UDim2.fromOffset(2, rowY + 2) or UDim2.new(1, -40, 0, rowY + 2)
-                Row.DownButton.Position = priorityOnLeft and UDim2.fromOffset(21, rowY + 2) or UDim2.new(1, -21, 0, rowY + 2)
+                Row.UpButton.Position = priorityOnLeft and UDim2.fromOffset(4, rowY + 4) or UDim2.new(1, -36, 0, rowY + 4)
+                Row.DownButton.Position = priorityOnLeft and UDim2.fromOffset(23, rowY + 4) or UDim2.new(1, -17, 0, rowY + 4)
 
                 Row:UpdateButton()
             end
@@ -7666,7 +7666,7 @@ do
                 ImageColor3 = "FontColor",
                 ImageRectOffset = UpIcon and UpIcon.ImageRectOffset or Vector2.zero,
                 ImageRectSize = UpIcon and UpIcon.ImageRectSize or Vector2.zero,
-                Size = UDim2.fromOffset(17, 17),
+                Size = UDim2.fromOffset(13, 13),
                 Visible = false,
                 ZIndex = PriorityButtonZIndex,
                 Parent = MenuTable.Menu,
@@ -7678,7 +7678,7 @@ do
                 ImageColor3 = "FontColor",
                 ImageRectOffset = DownIcon and DownIcon.ImageRectOffset or Vector2.zero,
                 ImageRectSize = DownIcon and DownIcon.ImageRectSize or Vector2.zero,
-                Size = UDim2.fromOffset(17, 17),
+                Size = UDim2.fromOffset(13, 13),
                 Visible = false,
                 ZIndex = PriorityButtonZIndex,
                 Parent = MenuTable.Menu,

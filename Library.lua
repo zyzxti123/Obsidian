@@ -184,6 +184,7 @@ do
 end
 
 local Library = {
+    ESPPreviewVersion = 3,
     LocalPlayer = LocalPlayer,
     IsRobloxFocused = true,
 
@@ -10926,17 +10927,24 @@ do
         end
 
         function Preview:SetObject(object: Model?): ()
-            self.ObjectAvailable = object ~= nil
-            ViewportFrame.Visible = self.ObjectAvailable
-            if not object then ChamsViewport.Visible = false; return end
+            assert(not self.Destroyed, "Cannot replace a destroyed ESP preview model")
+            if not object then
+                self.ObjectAvailable, ViewportFrame.Visible, ChamsViewport.Visible = false, false, false
+                return
+            end
             assert(typeof(object) == "Instance" and object:IsA("Model"), "Expected a model")
             assert(object:FindFirstChildWhichIsA("BasePart", true), "Expected model geometry")
-            assert(object.Archivable, "Preview model must be Archivable")
-            local replacement = object:Clone()
+            local archivable = object.Archivable
+            object.Archivable = true
+            local cloned, replacement = pcall(object.Clone, object)
+            object.Archivable = archivable
+            assert(cloned and replacement, `Could not clone ESP preview model: {tostring(replacement)}`)
+            replacement:PivotTo(CFrame.new())
             Model:Destroy()
             Model = replacement
             Model.Parent = World
             ReadModel()
+            self.ObjectAvailable, ViewportFrame.Visible = true, true
             ApplyModel()
             self.Object = Model
         end

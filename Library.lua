@@ -10617,6 +10617,7 @@ do
             local frame = Instance.new("ImageLabel")
             frame.BackgroundTransparency = 1
             frame.BorderSizePixel = 0
+            frame.ImageColor3 = Color3.new(1, 1, 1)
             frame.Visible = false
             frame.ScaleType = Enum.ScaleType.Fit
             local properties = { Position = Vector2.zero, Size = Vector2.zero, Color = Color3.new(1, 1, 1), Transparency = 1, Uri = "", Visible = false, ZIndex = 4 }
@@ -10703,6 +10704,7 @@ do
                 TemplateText = definition.Text or definition.Label or itemId, Image = definition.Image or (if itemId == "WeaponIcon" then "rbxassetid://14882620172" else nil),
                 Enabled = definition.Enabled == true, Side = definition.Side or "Right",
                 Order = definition.Order or (#self.ItemOrder + 1), Color = definition.Color or Color3.fromRGB(224, 226, 232),
+                OriginalColors = if definition.OriginalColors == nil then itemId == "WeaponIcon" else definition.OriginalColors == true,
                 Transparency = definition.Transparency or 0, Size = definition.Size or 12,
                 Outline = definition.Outline ~= false, Background = definition.Background == true,
                 BackgroundColor = definition.BackgroundColor or Color3.fromRGB(20, 22, 29),
@@ -10752,7 +10754,7 @@ do
                 local item = self.Items[itemId]
                 config.Items[itemId] = {
                     Enabled = item.Enabled, Side = item.Side, Order = item.Order, Color = item.Color:ToHex(),
-                    Transparency = item.Transparency, Size = item.Size, Outline = item.Outline,
+                    Transparency = item.Transparency, Size = item.Size, Outline = item.Outline, OriginalColors = item.OriginalColors,
                     Background = item.Background, BackgroundColor = item.BackgroundColor:ToHex(),
                     Thickness = item.Thickness, Format = item.Format, BoxType = item.BoxType, Text = item.Text,
                 }
@@ -10844,7 +10846,7 @@ do
                 elseif property == "Size" then item.Size = math.clamp(value, 8, 24)
                 elseif property == "Thickness" then item.Thickness = math.clamp(value, 1, 8)
                 elseif property == "Order" then item.Order = math.max(1, value)
-                elseif property == "Enabled" or property == "Outline" or property == "Background" then
+                elseif property == "Enabled" or property == "Outline" or property == "Background" or property == "OriginalColors" then
                     assert(type(value) == "boolean", "ESP switches must be booleans")
                     item[property] = value
                 elseif property == "Text" then item.Text = tostring(value)
@@ -11057,6 +11059,7 @@ do
             OutlineButton.Text = `Shadow / outline                   {if Selected.Outline then "ON" else "OFF"}`
             SideButton.Text = `Position                                  {Selected.Side} ›`
             FormatButton.Text = if Selected.Kind == "Box" then `Box Type                              {Selected.BoxType} ›`
+                elseif Selected.Kind == "Icon" then `Icon Colors                            {if Selected.OriginalColors then "Original" else "Custom"} ›`
                 else `Format                                   {Selected.Format} ›`
             local box = Selected.Kind == "Box"
             SampleText.Visible = not box
@@ -11120,6 +11123,8 @@ do
             if not Selected then return end
             if Selected.Kind == "Box" then
                 Preview:SetItem(Selected.Id, { BoxType = BoxTypes[(table.find(BoxTypes, Selected.BoxType) or #BoxTypes) % #BoxTypes + 1] })
+            elseif Selected.Kind == "Icon" then
+                Preview:SetItem(Selected.Id, { OriginalColors = not Selected.OriginalColors })
             else
                 Preview:SetItem(Selected.Id, { Format = if Selected.Format == "Absolute" then "Percent" else "Absolute" })
             end
@@ -11421,9 +11426,9 @@ do
         end
 
         function Preview:RenderTracer(items: any, rect: any, settings: any, _context: any?): ()
+            if not settings.Tracers then return end
             local item = items.Tracer
             if not item then item = { Drawings = {}, Transparency = 0 }; items.Tracer = item end
-            if not settings.Tracers then return end
             local size = if _context then _context.ViewportSize else Stage.AbsoluteSize
             local origin = if _context then Vector2.zero else Stage.AbsolutePosition
             local anchor = settings.TracerOrigin or "Bottom"
@@ -11542,7 +11547,7 @@ do
                 local image = if _context then item.ResolvedImage else item.Image
 
                 if image then
-                    Draw(item, "Image", "Image", { Uri = image, Position = position, Size = Vector2.new(rect.Width, rect.Height), Color = color, ZIndex = 4 }, _context)
+                    Draw(item, "Image", "Image", { Uri = image, Position = position, Size = Vector2.new(rect.Width, rect.Height), Color = if item.OriginalColors then Color3.new(1, 1, 1) else color, ZIndex = 4 }, _context)
                     return
                 end
 
@@ -11651,7 +11656,7 @@ do
                 end
             end
 
-            local function RemovePlayer(player: Player): ()
+            local function RemovePlayer(player: Instance): ()
                 local target = tracker.Targets[player]
                 if not target then return end
                 target.Removed = true

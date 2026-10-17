@@ -10614,6 +10614,41 @@ do
             Library:SafeCallback(Preview.Changed, config, itemId, Preview)
         end
 
+        local IconMasks = {}
+        local IconMaskCount = 0
+
+        function Preview:GetIconMask(uri: string): any
+            local entry = IconMasks[uri]
+            if entry then return entry.Content end
+            if IconMaskCount >= 32 then return nil end
+            entry = {}
+            IconMasks[uri] = entry
+            IconMaskCount += 1
+            task.spawn(function(): ()
+                local editable
+                local success, message = pcall(function(): ()
+                    local identifier = string.match(uri, "^rbxassetid://(%d+)$")
+                    local source = if identifier then `rbxthumb://type=Asset&id={identifier}&w=150&h=150` else uri
+                    editable = game:GetService("AssetService"):CreateEditableImageAsync(Content.fromUri(source))
+                    assert(editable, "Editable image memory budget exhausted")
+                    local pixels = editable:ReadPixelsBuffer(Vector2.zero, editable.Size)
+                    for offset = 0, buffer.len(pixels) - 1, 4 do
+                        buffer.writeu8(pixels, offset, 255)
+                        buffer.writeu8(pixels, offset + 1, 255)
+                        buffer.writeu8(pixels, offset + 2, 255)
+                    end
+                    editable:WritePixelsBuffer(Vector2.zero, editable.Size, pixels)
+                    if Preview.Destroyed then editable:Destroy(); editable = nil; return end
+                    entry.Image, entry.Content = editable, Content.fromObject(editable)
+                end)
+                if not success then
+                    if editable then editable:Destroy() end
+                    warn(`[Obsidian Weapon Icon] Solid color unavailable for {uri}: {message}`)
+                end
+            end)
+            return entry.Content
+        end
+
         local function CreateImageDrawing(): any
             local frame = Instance.new("ImageLabel")
             frame.BackgroundTransparency = 1
@@ -10639,7 +10674,10 @@ do
                     elseif key == "Size" then frame.Size = UDim2.fromOffset(value.X, value.Y)
                     elseif key == "Color" then frame.ImageColor3 = value
                     elseif key == "Transparency" then frame.ImageTransparency = 1 - value
-                    elseif key == "Uri" then frame.Image = value
+                    elseif key == "Uri" then
+                        if not properties.Content then frame.Image = value end
+                    elseif key == "Content" then
+                        if value then frame.ImageContent = value else frame.Image = properties.Uri end
                     elseif key == "Visible" then frame.Visible = value
                     elseif key == "ZIndex" then frame.ZIndex = value end
                 end,
@@ -11555,7 +11593,8 @@ do
                 local image = if _context then item.ResolvedImage else item.Image
 
                 if image then
-                    Draw(item, "Image", "Image", { Uri = image, Position = position, Size = Vector2.new(rect.Width, rect.Height), Color = if item.OriginalColors then Color3.new(1, 1, 1) else color, ZIndex = 4 }, _context)
+                    local drawing = Draw(item, "Image", "Image", { Uri = image, Position = position, Size = Vector2.new(rect.Width, rect.Height), Color = if item.OriginalColors then Color3.new(1, 1, 1) else color, ZIndex = 4 }, _context)
+                    drawing.Content = if item.OriginalColors then nil else Preview:GetIconMask(image)
                     return
                 end
 
@@ -12143,6 +12182,10 @@ do
         function Preview:Destroy(): ()
             if self.Destroyed then return end
             self.Destroyed = true
+            for _, entry in IconMasks do
+                if entry.Image then entry.Image:Destroy() end
+            end
+            table.clear(IconMasks)
             for index = #self.Trackers, 1, -1 do self.Trackers[index]:Destroy() end
             for _, connection in self.Connections do connection:Disconnect() end
             table.clear(self.Connections)

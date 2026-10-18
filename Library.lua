@@ -10748,6 +10748,27 @@ do
             return object
         end
 
+        local NativeTextFonts = setmetatable({}, { __mode = "k" })
+        local function ApplyNativeTextFont(object: any, font: Enum.Font?): ()
+            local frame = if type(object) == "table" then rawget(object, "_frame") else nil
+            if typeof(frame) ~= "Instance" then
+                return
+            end
+
+            local previous = NativeTextFonts[object]
+            if font then
+                if not previous then
+                    NativeTextFonts[object] = { Face = frame.FontFace, DrawingFont = object.Font }
+                end
+                frame.Font = font
+            elseif previous then
+                if previous.Face and object.Font == previous.DrawingFont then
+                    frame.FontFace = previous.Face
+                end
+                NativeTextFonts[object] = nil
+            end
+        end
+
         local function Draw(item: any, key: string, className: string, properties: { [string]: any }, _context: any?): any
             local object = CreateDrawing(item, key, className, _context)
             if _context and _context.Drawn then _context.Drawn[object] = _context.Generation end
@@ -10772,6 +10793,11 @@ do
                 else
                     if object[property] ~= value then object[property] = value end
                 end
+            end
+            if className == "Text" then
+                local settings = if _context then _context.Settings else Preview.ProfileSettings
+                local font = if Info.Fonts and settings then Info.Fonts[settings.Font] else nil
+                ApplyNativeTextFont(object, font)
             end
             local transparency = 1 - (item.ResolvedTransparency or item.Transparency)
             if object.Transparency ~= transparency then object.Transparency = transparency end
@@ -10807,7 +10833,7 @@ do
                 Transparency = definition.Transparency or 0, Size = definition.Size or 12,
                 Outline = definition.Outline ~= false, Background = definition.Background == true,
                 BackgroundColor = definition.BackgroundColor or Color3.fromRGB(20, 22, 29),
-                Thickness = definition.Thickness or 2, Format = "Absolute", BoxType = definition.BoxType or "Bounding Box", Drawings = {},
+                Thickness = definition.Thickness or (if definition.Kind == "Skeleton" then 1 else 2), Format = "Absolute", BoxType = definition.BoxType or "Bounding Box", Drawings = {},
                 Hover = New("Frame", { BackgroundColor3 = Accent, BackgroundTransparency = 1, Visible = false, ZIndex = 2, Parent = HoverLayer }),
             }
             assert(table.find(Sides, item.Side), "Invalid ESP item side")
@@ -11415,17 +11441,28 @@ do
             local object = CreateDrawing(item, "Text", "Text", _context)
             local text = TextFor(item, _context)
             local settings = if _context then _context.Settings else Preview.ProfileSettings
+            local nativeFont = if Info.Fonts and settings then Info.Fonts[settings.Font] else nil
             local font = DrawingProvider.Fonts[settings and settings.Font or "System"] or 2
+            local fontKey = nativeFont or font
             local size = item.Size * (if item.UsesGui and not _context then 1 else scale)
-            if item.MeasureText == text and item.MeasureFont == font and item.MeasureSize == size and item.MeasureScale == scale then
+            if item.MeasureText == text and item.MeasureFont == fontKey and item.MeasureSize == size and item.MeasureScale == scale then
                 return item.MeasureWidth, item.MeasureHeight
             end
             if object.Text ~= text then object.Text = text end
+            if item.MeasureNativeFont and not nativeFont then
+                object.Font = if font == 0 then 1 else 0
+            end
             if object.Font ~= font then object.Font = font end
+            item.MeasureNativeFont = nativeFont
             if object.Size ~= size then object.Size = size end
+            if not nativeFont then ApplyNativeTextFont(object, nil) end
             local bounds = object.TextBounds
+            if nativeFont and item.UsesGui then
+                ApplyNativeTextFont(object, nativeFont)
+                bounds = TextService:GetTextSize(text, size, nativeFont, Vector2.new(math.huge, math.huge))
+            end
             local width, height = math.max(12, bounds.X * (if item.UsesGui and not _context then scale else 1)) + 8 * scale, (item.Size + 5) * scale
-            item.MeasureText, item.MeasureFont, item.MeasureSize, item.MeasureScale = text, font, size, scale
+            item.MeasureText, item.MeasureFont, item.MeasureSize, item.MeasureScale = text, fontKey, size, scale
             item.MeasureWidth, item.MeasureHeight = width, height
             return width, height
         end
@@ -11642,23 +11679,19 @@ do
                 local inset = math.min(math.max(1, math.floor(scale + 0.5)), (track.Width - 1) // 2, (track.Height - 1) // 2)
                 local length = (if vertical then track.Height else track.Width) - inset * 2
                 Square(item, "Track", track, Color3.fromRGB(36, 38, 47), true, nil, _context)
-                local segments = math.min(if health then 24 else 1, length)
-                for index = 1, segments do
-                    local lower = math.floor(((index - 1) / segments) * length + 0.5)
-                    local upper = math.floor(math.min(ratio, index / segments) * length + 0.5)
-                    if upper <= lower then continue end
+                local filledLength = math.floor(ratio * length + 0.5)
+                if filledLength > 0 then
                     local fill = {
                         X = track.X + inset, Y = track.Y + inset,
                         Width = track.Width - inset * 2, Height = track.Height - inset * 2,
                     }
                     if vertical then
-                        fill.Y += length - upper
-                        fill.Height = upper - lower
+                        fill.Y += length - filledLength
+                        fill.Height = filledLength
                     else
-                        fill.X += lower
-                        fill.Width = upper - lower
+                        fill.Width = filledLength
                     end
-                    Square(item, `Fill{index}`, fill, if health then Color3.fromRGB(255, 74, 86):Lerp(color, upper / length) else color, true, nil, _context)
+                    Square(item, "Fill1", fill, if health then Color3.fromRGB(255, 74, 86):Lerp(color, ratio) else color, true, nil, _context)
                 end
                 if health then
                     Draw(item, "Value", "Text", {
@@ -14111,15 +14144,16 @@ function Library:Notify(...: any): any
         local index = table.find(NotifyOrder, frame)
         if index then table.remove(NotifyOrder, index) end
         if typeof(self.Time) == "Instance" then pcall(self.Time.Destroy, self.Time) end
-        Library:UpdateNotificationPositions()
         if _immediate or Library.Unloaded or not self.Ready then
             self:Dispose()
         else
+            -- Queue disposal before animation or layout can yield or fail.
+            self.Tasks.Dispose = task.delay(Library.NotifyTweenInfo.Time, function(): () self:Dispose() end)
             self:Tween("Exit", holder, Library.NotifyTweenInfo, {
                 GroupTransparency = 1, Position = UDim2.fromOffset(if string.lower(Library.NotifySide) == "left" then -14 else 14, -3),
             })
-            self.Tasks.Dispose = task.delay(Library.NotifyTweenInfo.Time, function(): () self:Dispose() end)
         end
+        Library:UpdateNotificationPositions()
         if self.Callback then
             local success, message = pcall(self.Callback, _reason or "script")
             if not success then warn("[Obsidian notification] " .. tostring(message)) end
@@ -14162,15 +14196,18 @@ function Library:Notify(...: any): any
     data:Tween("Enter", holder, Library.NotifyTweenInfo, { Position = UDim2.fromOffset(0, 0), GroupTransparency = 0 })
     Library:UpdateNotificationPositions()
     if not data.Persist and typeof(data.Time) ~= "Instance" then
+        local duration = math.max(0, tonumber(data.Time) or 5)
+        data.Tasks.Expiry = task.delay(Library.NotifyTweenInfo.Time + duration, function(): ()
+            data.Tasks.Expiry = nil
+            data:Destroy("timer", true)
+        end)
         data.Tasks.Enter = task.delay(Library.NotifyTweenInfo.Time, function(): ()
             setthreadidentity(8)
             data.Tasks.Enter = nil
             if data.Destroyed then return end
-            local duration = math.max(0, tonumber(data.Time) or 5)
             if showTimer and not data.Steps then
                 data:Tween("Timer", fill, TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut), { Size = UDim2.fromScale(0, 1) })
             end
-            data.Tasks.Expiry = task.delay(duration, function(): () data:Destroy("timer") end)
         end)
     end
     if data.SoundId then

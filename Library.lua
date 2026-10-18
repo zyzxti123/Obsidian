@@ -184,7 +184,7 @@ do
 end
 
 local Library = {
-    ESPPreviewVersion = 3,
+    ESPPreviewVersion = 4,
     LocalPlayer = LocalPlayer,
     IsRobloxFocused = true,
 
@@ -10525,6 +10525,44 @@ do
             ModelSize, ModelCenter, BasePivot = size, bounds.Position, Model:GetPivot()
         end
 
+        local ModelTextures = {}
+
+        function Preview:UpdateChamsTexture(color: Color3): ()
+            for part, textures in ModelTextures do
+                if part.Parent then continue end
+                for _, texture in textures do texture:Destroy() end
+                ModelTextures[part] = nil
+            end
+            local settings = self.ProfileSettings
+            local asset = if settings.Chams and Info.ChamsTextureAssets then Info.ChamsTextureAssets[settings.Texture or "None"] else nil
+            local scale = math.max(0.25, settings.TextureScale or 4)
+            local offset = self.AnimationTime * (settings.TextureSpeed or 0.5) % scale
+            for _, part in ModelParts do
+                local textures = ModelTextures[part]
+                if not asset or asset == "" then
+                    if textures then
+                        for _, texture in textures do texture:Destroy() end
+                        ModelTextures[part] = nil
+                    end
+                    continue
+                end
+                if not textures then
+                    textures = {}
+                    ModelTextures[part] = textures
+                    for _, face in Enum.NormalId:GetEnumItems() do
+                        local texture = Instance.new("Texture")
+                        texture.Name, texture.Face, texture.Parent = "ZWareChamsTexture", face, part
+                        table.insert(textures, texture)
+                    end
+                end
+                for _, texture in textures do
+                    texture.Texture, texture.Color3, texture.Transparency = asset, color, 0.15
+                    texture.StudsPerTileU, texture.StudsPerTileV = scale, scale
+                    texture.OffsetStudsU, texture.OffsetStudsV = offset, offset * 0.5
+                end
+            end
+        end
+
         function Preview:ResolveChamsAppearance(): any
             local settings = self.ProfileSettings
             local material = if self.ModelStyle == "Neon" then Enum.Material.Neon else Enum.Material.SmoothPlastic
@@ -10554,6 +10592,7 @@ do
                 if part.Material ~= appearance.Material then part.Material = appearance.Material end
                 if part.Transparency ~= appearance.Transparency then part.Transparency = appearance.Transparency end
             end
+            self:UpdateChamsTexture(appearance.Color)
             ChamsViewport.Visible = appearance.Enabled and appearance.FillTransparency < 1
             if not ChamsViewport.Visible then return end
             if not ChamsModel then
@@ -10710,6 +10749,10 @@ do
 
         local function Draw(item: any, key: string, className: string, properties: { [string]: any }, _context: any?): any
             local object = CreateDrawing(item, key, className, _context)
+            if className == "Text" then
+                local settings = if _context then _context.Settings else Preview.ProfileSettings
+                properties.Font = DrawingProvider.Fonts[settings and settings.Font or "System"] or 2
+            end
             -- Z-WareDrawing insets filled squares by their outline thickness too.
             if className == "Square" and properties.Filled == true and item.UsesGui then properties.Thickness = 0 end
             local scale = if item.UsesGui and not _context then Scale() else 1
@@ -11365,7 +11408,8 @@ do
             end
             local object = CreateDrawing(item, "Text", "Text", _context)
             object.Text = TextFor(item, _context)
-            object.Font = 2
+            local settings = if _context then _context.Settings else Preview.ProfileSettings
+            object.Font = DrawingProvider.Fonts[settings and settings.Font or "System"] or 2
             object.Size = item.Size * (if item.UsesGui and not _context then 1 else scale)
             local bounds = object.TextBounds
             return math.max(12, bounds.X * (if item.UsesGui and not _context then scale else 1)) + 8 * scale, (item.Size + 5) * scale
@@ -11870,22 +11914,29 @@ do
             local function RenderPlayer(target: any, camera: Camera, origin: Vector3, deltaTime: number): ()
                 local player = target.Player
                 if player then
-                    if player.Character == target.RemovingCharacter then return end
+                    if player.Character == target.RemovingCharacter then HideTarget(target); return end
                     if player.Character ~= target.Character then AttachCharacter(target, player.Character) end
                 end
                 local character = target.Character
-                if not character or not character:IsDescendantOf(workspace) then return end
+                if not character or not character:IsDescendantOf(workspace) then HideTarget(target); return end
                 local humanoid = character:FindFirstChildOfClass("Humanoid")
-                if humanoid and humanoid.Health <= 0 then return end
+                if humanoid and humanoid.Health <= 0 then HideTarget(target); return end
                 local allied = player and player ~= LocalPlayer and LocalPlayer.Team ~= nil and player.Team == LocalPlayer.Team
                 local team = target.Profile or (if options.Profile then options.Profile(player) elseif player == LocalPlayer then "Local" elseif allied and table.find(Teams, "Allies") then "Allies" else Teams[1])
+                local changed = target.Revision ~= Preview.Revision or target.Team ~= team
                 SyncItems(target, team)
                 local settings = target.Config.Settings
-                if settings.Enabled == false then return end
+                if settings.Enabled == false then HideTarget(target); return end
                 local pivot = character:GetPivot()
                 local distance = (origin - pivot.Position).Magnitude
-                if distance > math.min(tracker.MaxDistance, settings.MaxDistance or math.huge) then return end
-                if not options.Profile and (tracker.TeamCheck or settings.TeamCheck) and allied then return end
+                if distance > math.min(tracker.MaxDistance, settings.MaxDistance or math.huge) then HideTarget(target); return end
+                if not options.Profile and (tracker.TeamCheck or settings.TeamCheck) and allied then HideTarget(target); return end
+                local refreshRate = tonumber(settings.RefreshRate)
+                target.RefreshElapsed = (target.RefreshElapsed or 0) + deltaTime
+                if refreshRate and not changed and target.HasRendered and target.RefreshElapsed < 1 / math.clamp(refreshRate, 1, 240) then return end
+                target.RefreshElapsed = if refreshRate then target.RefreshElapsed % (1 / math.clamp(refreshRate, 1, 240)) else 0
+                target.HasRendered = true
+                HideTarget(target)
                 if not target.Parts then
                     target.Parts = {}
                     for _, child in character:GetDescendants() do
@@ -11894,26 +11945,26 @@ do
                 end
                 local root = character:FindFirstChild("HumanoidRootPart")
                 local rect = WorldBounds(target, camera)
-                if not rect then return end
+                if not rect then HideTarget(target); return end
                 local context = {
                     Player = player, Character = character, Humanoid = humanoid, RootPart = root, Pivot = pivot,
                     Camera = camera, Distance = distance, Team = team, DeltaTime = deltaTime, Data = {},
-                    Items = target.Items, Parts = target.Parts, Scale = settings.TextScale or tracker.TextScale, Layer = layer, ViewportSize = camera.ViewportSize,
+                    Items = target.Items, Parts = target.Parts, Settings = settings, Scale = settings.TextScale or tracker.TextScale, Layer = layer, ViewportSize = camera.ViewportSize,
                 }
                 local dataProvider = options.DataProvider or Preview.DataProvider
                 if dataProvider then
                     local success, data = CallProvider(dataProvider, context, "DataProvider")
-                    if not success or type(data) ~= "table" then return end
+                    if not success or type(data) ~= "table" then HideTarget(target); return end
                     context.Data = data
                 end
                 if tracker.Filter then
                     local success, allowed = CallProvider(tracker.Filter, context, "Filter")
-                    if not success or allowed ~= true then return end
+                    if not success or allowed ~= true then HideTarget(target); return end
                 end
-                if tracker.Destroyed or target.Removed or target.Character ~= character then return end
+                if tracker.Destroyed or target.Removed or target.Character ~= character then HideTarget(target); return end
                 SyncItems(target, team)
                 for _, itemId in Preview.ItemOrder do ResolveItem(target.Items[itemId], context) end
-                if tracker.Destroyed or target.Removed or target.Character ~= character then return end
+                if tracker.Destroyed or target.Removed or target.Character ~= character then HideTarget(target); return end
                 rect = Layout(rect, context)
                 for _, itemId in Preview.ItemOrder do
                     local item = target.Items[itemId]
@@ -11986,10 +12037,15 @@ do
             table.insert(tracker.Connections, RunService.RenderStepped:Connect(function(deltaTime: number): ()
                 setthreadidentity(8)
                 if tracker.Destroyed or tracker.Updating then return end
-                for _, target in tracker.Targets do HideTarget(target) end
-                if not tracker.Enabled or Library.Unloaded then return end
+                if not tracker.Enabled or Library.Unloaded then
+                    for _, target in tracker.Targets do HideTarget(target) end
+                    return
+                end
                 local camera = workspace.CurrentCamera
-                if not camera then return end
+                if not camera then
+                    for _, target in tracker.Targets do HideTarget(target) end
+                    return
+                end
                 local localCharacter = LocalPlayer.Character
                 local origin = if localCharacter and localCharacter:IsDescendantOf(workspace) then localCharacter:GetPivot().Position else camera.CFrame.Position
                 tracker.Updating = true

@@ -184,7 +184,7 @@ do
 end
 
 local Library = {
-    ESPPreviewVersion = 4,
+    ESPPreviewVersion = 5,
     LocalPlayer = LocalPlayer,
     IsRobloxFocused = true,
 
@@ -10749,6 +10749,7 @@ do
 
         local function Draw(item: any, key: string, className: string, properties: { [string]: any }, _context: any?): any
             local object = CreateDrawing(item, key, className, _context)
+            if _context and _context.Drawn then _context.Drawn[object] = _context.Generation end
             if className == "Text" then
                 local settings = if _context then _context.Settings else Preview.ProfileSettings
                 properties.Font = DrawingProvider.Fonts[settings and settings.Font or "System"] or 2
@@ -10759,17 +10760,21 @@ do
             local origin = if _context then Vector2.zero elseif item.UsesGui then Stage.AbsolutePosition else -select(1, GuiService:GetGuiInset())
             for property, value in properties do
                 if property == "Position" or property == "From" or property == "To" then
-                    object[property] = (value - origin) / scale
+                    local transformed = (value - origin) / scale
+                    if object[property] ~= transformed then object[property] = transformed end
                 elseif property == "Size" and typeof(value) == "Vector2" then
-                    object.Size = value / scale
+                    local transformed = value / scale
+                    if object.Size ~= transformed then object.Size = transformed end
                 elseif property == "Size" or property == "Thickness" then
-                    object[property] = value / scale
+                    local transformed = value / scale
+                    if object[property] ~= transformed then object[property] = transformed end
                 else
-                    object[property] = value
+                    if object[property] ~= value then object[property] = value end
                 end
             end
-            object.Transparency = 1 - (item.ResolvedTransparency or item.Transparency)
-            object.Visible = true
+            local transparency = 1 - (item.ResolvedTransparency or item.Transparency)
+            if object.Transparency ~= transparency then object.Transparency = transparency end
+            if not object.Visible then object.Visible = true end
             return object
         end
 
@@ -11407,12 +11412,21 @@ do
                 return item.Size * 4 * scale, (item.Size + 4) * scale
             end
             local object = CreateDrawing(item, "Text", "Text", _context)
-            object.Text = TextFor(item, _context)
+            local text = TextFor(item, _context)
             local settings = if _context then _context.Settings else Preview.ProfileSettings
-            object.Font = DrawingProvider.Fonts[settings and settings.Font or "System"] or 2
-            object.Size = item.Size * (if item.UsesGui and not _context then 1 else scale)
+            local font = DrawingProvider.Fonts[settings and settings.Font or "System"] or 2
+            local size = item.Size * (if item.UsesGui and not _context then 1 else scale)
+            if item.MeasureText == text and item.MeasureFont == font and item.MeasureSize == size and item.MeasureScale == scale then
+                return item.MeasureWidth, item.MeasureHeight
+            end
+            if object.Text ~= text then object.Text = text end
+            if object.Font ~= font then object.Font = font end
+            if object.Size ~= size then object.Size = size end
             local bounds = object.TextBounds
-            return math.max(12, bounds.X * (if item.UsesGui and not _context then scale else 1)) + 8 * scale, (item.Size + 5) * scale
+            local width, height = math.max(12, bounds.X * (if item.UsesGui and not _context then scale else 1)) + 8 * scale, (item.Size + 5) * scale
+            item.MeasureText, item.MeasureFont, item.MeasureSize, item.MeasureScale = text, font, size, scale
+            item.MeasureWidth, item.MeasureHeight = width, height
+            return width, height
         end
 
         local function Layout(rect: any, _context: any?): any
@@ -11545,14 +11559,12 @@ do
             local frame = if _context then _context.Pivot else Model:GetPivot()
             local minimum, maximum = Vector3.new(math.huge, math.huge, math.huge), Vector3.new(-math.huge, -math.huge, -math.huge)
             for _, part in parts do
-                for horizontal = -1, 1, 2 do
-                    for vertical = -1, 1, 2 do
-                        for depth = -1, 1, 2 do
-                            local point = frame:PointToObjectSpace(part.CFrame:PointToWorldSpace(part.Size * Vector3.new(horizontal, vertical, depth) / 2))
-                            minimum, maximum = minimum:Min(point), maximum:Max(point)
-                        end
-                    end
-                end
+                local relative = frame:ToObjectSpace(part.CFrame)
+                local x, y, z, xx, xy, xz, yx, yy, yz, zx, zy, zz = relative:GetComponents()
+                local half = part.Size / 2
+                local extent = Vector3.new(math.abs(xx) * half.X + math.abs(xy) * half.Y + math.abs(xz) * half.Z, math.abs(yx) * half.X + math.abs(yy) * half.Y + math.abs(yz) * half.Z, math.abs(zx) * half.X + math.abs(zy) * half.Y + math.abs(zz) * half.Z)
+                local center = Vector3.new(x, y, z)
+                minimum, maximum = minimum:Min(center - extent), maximum:Max(center + extent)
             end
             if minimum.X == math.huge then return nil end
             local camera = if _context then _context.Camera else Camera
@@ -11751,7 +11763,7 @@ do
             local function AttachCharacter(target: any, character: Model?): ()
                 DisconnectAll(target.CharacterConnections)
                 HideTarget(target)
-                target.Character, target.Parts, target.RemovingCharacter = character, nil, nil
+                target.Character, target.Parts, target.RemovingCharacter, target.HasRendered = character, nil, nil, false
                 if not character then return end
                 for _, signal in { character.DescendantAdded, character.DescendantRemoving } do
                     table.insert(target.CharacterConnections, signal:Connect(function(): () target.Parts = nil end))
@@ -11869,9 +11881,20 @@ do
                 item.Enabled = true
             end
 
+            local ProfileCache = {}
+            local ProfileRevision = -1
+
             local function SyncItems(target: any, team: string): ()
                 if target.Revision == Preview.Revision and target.Team == team then return end
-                local config = Preview:GetProfile(team)
+                if ProfileRevision ~= Preview.Revision then
+                    table.clear(ProfileCache)
+                    ProfileRevision = Preview.Revision
+                end
+                local config = ProfileCache[team]
+                if not config then
+                    config = Preview:GetProfile(team)
+                    ProfileCache[team] = config
+                end
                 for _, itemId in Preview.ItemOrder do
                     local definition = Preview.Items[itemId]
                     local settings = config.Items[itemId] or Defaults.Items[itemId] or Preview:GetConfig().Items[itemId]
@@ -11891,24 +11914,28 @@ do
             end
 
             local function WorldBounds(target: any, camera: Camera): any
-                local minimum, maximum = Vector2.new(math.huge, math.huge), Vector2.new(-math.huge, -math.huge)
+                local minimumX, minimumY, maximumX, maximumY = math.huge, math.huge, -math.huge, -math.huge
                 for _, part in target.Parts do
-                    for horizontal = -1, 1, 2 do
-                        for vertical = -1, 1, 2 do
-                            for depth = -1, 1, 2 do
-                                local world = part.CFrame:PointToWorldSpace(part.Size * Vector3.new(horizontal, vertical, depth) / 2)
-                                local projected = camera:WorldToViewportPoint(world)
+                    local frame, half = part.CFrame, part.Size / 2
+                    local center = frame.Position
+                    local horizontal, vertical, depth = frame.RightVector * half.X, frame.UpVector * half.Y, frame.LookVector * half.Z
+                    for x = -1, 1, 2 do
+                        local side = center + horizontal * x
+                        for y = -1, 1, 2 do
+                            local edge = side + vertical * y
+                            for z = -1, 1, 2 do
+                                local projected = camera:WorldToViewportPoint(edge + depth * z)
                                 if projected.Z <= 0.1 or not IsFinite(projected.X) or not IsFinite(projected.Y) then return nil end
-                                minimum = Vector2.new(math.min(minimum.X, projected.X), math.min(minimum.Y, projected.Y))
-                                maximum = Vector2.new(math.max(maximum.X, projected.X), math.max(maximum.Y, projected.Y))
+                                minimumX, minimumY = math.min(minimumX, projected.X), math.min(minimumY, projected.Y)
+                                maximumX, maximumY = math.max(maximumX, projected.X), math.max(maximumY, projected.Y)
                             end
                         end
                     end
                 end
                 local size = camera.ViewportSize
-                if maximum.X < 0 or maximum.Y < 0 or minimum.X > size.X or minimum.Y > size.Y then return nil end
-                if minimum.X == math.huge or maximum.X - minimum.X < 1 or maximum.Y - minimum.Y < 1 then return nil end
-                return { X = minimum.X, Y = minimum.Y, Width = maximum.X - minimum.X, Height = maximum.Y - minimum.Y }
+                if maximumX < 0 or maximumY < 0 or minimumX > size.X or minimumY > size.Y then return nil end
+                if minimumX == math.huge or maximumX - minimumX < 1 or maximumY - minimumY < 1 then return nil end
+                return { X = minimumX, Y = minimumY, Width = maximumX - minimumX, Height = maximumY - minimumY }
             end
 
             local function RenderPlayer(target: any, camera: Camera, origin: Vector3, deltaTime: number): ()
@@ -11936,7 +11963,8 @@ do
                 if refreshRate and not changed and target.HasRendered and target.RefreshElapsed < 1 / math.clamp(refreshRate, 1, 240) then return end
                 target.RefreshElapsed = if refreshRate then target.RefreshElapsed % (1 / math.clamp(refreshRate, 1, 240)) else 0
                 target.HasRendered = true
-                HideTarget(target)
+                target.Generation = (target.Generation or 0) + 1
+                target.Drawn = target.Drawn or {}
                 if not target.Parts then
                     target.Parts = {}
                     for _, child in character:GetDescendants() do
@@ -11950,6 +11978,7 @@ do
                     Player = player, Character = character, Humanoid = humanoid, RootPart = root, Pivot = pivot,
                     Camera = camera, Distance = distance, Team = team, DeltaTime = deltaTime, Data = {},
                     Items = target.Items, Parts = target.Parts, Settings = settings, Scale = settings.TextScale or tracker.TextScale, Layer = layer, ViewportSize = camera.ViewportSize,
+                    Drawn = target.Drawn, Generation = target.Generation,
                 }
                 local dataProvider = options.DataProvider or Preview.DataProvider
                 if dataProvider then
@@ -11971,6 +12000,12 @@ do
                     if item.Enabled then RenderItem(item, context) end
                 end
                 Preview:RenderTracer(target.Items, rect, settings, context)
+                for object, generation in target.Drawn do
+                    if generation ~= target.Generation then
+                        if object.Visible then object.Visible = false end
+                        target.Drawn[object] = nil
+                    end
+                end
                 target.Visible, target.Bounds = true, rect
                 if tracker.Chams and settings.Chams ~= false then
                     if not target.Highlight then
@@ -11983,6 +12018,8 @@ do
                     target.Highlight.OutlineColor = target.Highlight.FillColor
                     target.Highlight.FillTransparency = target.Config.ModelTransparency
                     target.Highlight.OutlineTransparency, target.Highlight.Enabled = 0.2, true
+                elseif target.Highlight then
+                    target.Highlight.Enabled = false
                 end
             end
 

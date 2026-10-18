@@ -10347,7 +10347,7 @@ do
         local Height = math.max(300, Info.Height or 500)
         local Sides = { "Left", "Top", "Right", "Bottom" }
         local Teams = Info.Profiles or { "Enemies", "Allies", "Local" }
-        assert(#Teams > 0 and #Teams <= 3, "ESP preview supports one to three profiles")
+        assert(#Teams > 0 and #Teams <= 4, "ESP preview supports one to four profiles")
         local BoxTypes = { "None", "2D Box", "3D Box", "Bounding Box" }
         local Profiles, ProfileControls = {}, {}
         local Defaults
@@ -10419,7 +10419,7 @@ do
 
         local TeamButtons = {}
         for index, team in Teams do
-            local button = Button(Toolbar, team, UDim2.new((index - 1) * 0.25, 0, 0, 0), UDim2.new(0.25, -4, 1, 0))
+            local button = Button(Toolbar, team, UDim2.new((index - 1) * 0.75 / #Teams, 0, 0, 0), UDim2.new(0.75 / #Teams, -4, 1, 0))
             button.TextScaled = true
             New("UITextSizeConstraint", { MinTextSize = 8, MaxTextSize = 12, Parent = button })
             button.TextColor3 = if team == Preview.Team then Accent else Library.Scheme.FontColor
@@ -11874,7 +11874,7 @@ do
                 local pivot = character:GetPivot()
                 local distance = (origin - pivot.Position).Magnitude
                 if distance > math.min(tracker.MaxDistance, settings.MaxDistance or math.huge) then return end
-                if (tracker.TeamCheck or settings.TeamCheck) and allied then return end
+                if not options.Profile and (tracker.TeamCheck or settings.TeamCheck) and allied then return end
                 if not target.Parts then
                     target.Parts = {}
                     for _, child in character:GetDescendants() do

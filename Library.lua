@@ -11518,7 +11518,7 @@ do
                 Vector3.new(0, 0, 1), Vector3.new(1, 0, 1), Vector3.new(1, 1, 1), Vector3.new(0, 1, 1),
             } do
                 local point = frame:PointToWorldSpace(minimum + (maximum - minimum) * offset)
-                if camera.CFrame:PointToObjectSpace(point).Z >= -0.05 then return nil end
+                if camera.CFrame:PointToObjectSpace(point).Z >= -0.1 then return nil end
                 table.insert(corners, Project(point, _context))
             end
             return corners
@@ -11854,7 +11854,7 @@ do
                             for depth = -1, 1, 2 do
                                 local world = part.CFrame:PointToWorldSpace(part.Size * Vector3.new(horizontal, vertical, depth) / 2)
                                 local projected = camera:WorldToViewportPoint(world)
-                                if projected.Z <= 0.1 then continue end
+                                if projected.Z <= 0.1 or not IsFinite(projected.X) or not IsFinite(projected.Y) then return nil end
                                 minimum = Vector2.new(math.min(minimum.X, projected.X), math.min(minimum.Y, projected.Y))
                                 maximum = Vector2.new(math.max(maximum.X, projected.X), math.max(maximum.Y, projected.Y))
                             end

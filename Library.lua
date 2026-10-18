@@ -6480,7 +6480,7 @@ do
             ColorPicker.Changed = Func
         end
 
-        function ColorPicker:SetValue(HSV, Transparency)
+        function ColorPicker:SetValue(HSV: any, Transparency: number?): ()
             setthreadidentity(8)
             if typeof(HSV) == "Color3" then
                 ColorPicker:SetValueRGB(HSV, Transparency)
@@ -6488,14 +6488,14 @@ do
             end
 
             local Color = Color3.fromHSV(HSV[1], HSV[2], HSV[3])
-            ColorPicker.Transparency = Info.Transparency and Transparency or 0
+            ColorPicker.Transparency = if Info.Transparency then math.clamp(if Transparency ~= nil then Transparency else ColorPicker.Transparency, 0, 1) else 0
             ColorPicker:SetHSVFromRGB(Color)
             ColorPicker:Update()
         end
 
-        function ColorPicker:SetValueRGB(Color, Transparency)
+        function ColorPicker:SetValueRGB(Color: Color3, Transparency: number?): ()
             setthreadidentity(8)
-            ColorPicker.Transparency = Info.Transparency and Transparency or 0
+            ColorPicker.Transparency = if Info.Transparency then math.clamp(if Transparency ~= nil then Transparency else ColorPicker.Transparency, 0, 1) else 0
             ColorPicker:SetHSVFromRGB(Color)
             ColorPicker:Update()
         end

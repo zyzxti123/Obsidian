@@ -10360,6 +10360,7 @@ do
         local Teams = Info.Profiles or { "Enemies", "Allies", "Local" }
         assert(#Teams > 0 and #Teams <= 4, "ESP preview supports one to four profiles")
         local BoxTypes = { "None", "2D Box", "3D Box", "Bounding Box" }
+        local BodyPartNames = { Head = true, Torso = true, UpperTorso = true, LowerTorso = true, ["Left Arm"] = true, ["Right Arm"] = true, ["Left Leg"] = true, ["Right Leg"] = true, LeftUpperArm = true, LeftLowerArm = true, LeftHand = true, RightUpperArm = true, RightLowerArm = true, RightHand = true, LeftUpperLeg = true, LeftLowerLeg = true, LeftFoot = true, RightUpperLeg = true, RightLowerLeg = true, RightFoot = true }
         local Profiles, ProfileControls = {}, {}
         local Defaults
         local Accent = Info.AccentColor or Library.Scheme.AccentColor
@@ -10755,7 +10756,7 @@ do
                 properties.Font = DrawingProvider.Fonts[settings and settings.Font or "System"] or 2
             end
             -- Z-WareDrawing insets filled squares by their outline thickness too.
-            if className == "Square" and properties.Filled == true and item.UsesGui then properties.Thickness = 0 end
+            if className == "Square" and properties.Filled == true then properties.Thickness = 0 end
             local scale = if item.UsesGui and not _context then Scale() else 1
             local origin = if _context then Vector2.zero elseif item.UsesGui then Stage.AbsolutePosition else -select(1, GuiService:GetGuiInset())
             for property, value in properties do
@@ -11575,7 +11576,19 @@ do
             } do
                 local point = frame:PointToWorldSpace(minimum + (maximum - minimum) * offset)
                 if camera.CFrame:PointToObjectSpace(point).Z >= -0.1 then return nil end
-                table.insert(corners, Project(point, _context))
+                local projected = Project(point, _context)
+                if projected.X ~= projected.X or projected.Y ~= projected.Y or math.abs(projected.X) == math.huge or math.abs(projected.Y) == math.huge then
+                    return nil
+                end
+                table.insert(corners, projected)
+            end
+            local minimum, maximum = Vector2.new(math.huge, math.huge), Vector2.new(-math.huge, -math.huge)
+            for _, point in corners do
+                minimum, maximum = minimum:Min(point), maximum:Max(point)
+            end
+            local size = if _context then _context.ViewportSize else Stage.AbsoluteSize
+            if maximum.X - minimum.X > size.X * 2 or maximum.Y - minimum.Y > size.Y * 2 then
+                return nil
             end
             return corners
         end
@@ -11915,7 +11928,7 @@ do
 
             local function WorldBounds(target: any, camera: Camera): any
                 local minimumX, minimumY, maximumX, maximumY = math.huge, math.huge, -math.huge, -math.huge
-                for _, part in target.Parts do
+                for _, part in target.RenderParts do
                     local frame, half = part.CFrame, part.Size / 2
                     local center = frame.Position
                     local horizontal, vertical, depth = frame.RightVector * half.X, frame.UpVector * half.Y, frame.LookVector * half.Z
@@ -11935,6 +11948,7 @@ do
                 local size = camera.ViewportSize
                 if maximumX < 0 or maximumY < 0 or minimumX > size.X or minimumY > size.Y then return nil end
                 if minimumX == math.huge or maximumX - minimumX < 1 or maximumY - minimumY < 1 then return nil end
+                if maximumX - minimumX > size.X * 2 or maximumY - minimumY > size.Y * 2 then return nil end
                 return { X = minimumX, Y = minimumY, Width = maximumX - minimumX, Height = maximumY - minimumY }
             end
 
@@ -11967,17 +11981,30 @@ do
                 target.Drawn = target.Drawn or {}
                 if not target.Parts then
                     target.Parts = {}
+                    local bodyOnly = humanoid and (character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso"))
                     for _, child in character:GetDescendants() do
-                        if child:IsA("BasePart") and child.Name ~= "HumanoidRootPart" then table.insert(target.Parts, child) end
+                        if child:IsA("BasePart") and child.Name ~= "HumanoidRootPart" and (not bodyOnly or child.Parent == character and BodyPartNames[child.Name]) then
+                            table.insert(target.Parts, child)
+                        end
                     end
                 end
                 local root = character:FindFirstChild("HumanoidRootPart")
+                local torso = if humanoid then character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso") else nil
+                local limit = if torso and torso:IsA("BasePart") then math.max(1, torso.Size.Magnitude) * 3 else nil
+                local renderParts = target.RenderParts or {}
+                target.RenderParts = renderParts
+                table.clear(renderParts)
+                for _, part in target.Parts do
+                    if part.Parent and (not limit or part.Size.Magnitude <= limit and (part.Position - torso.Position).Magnitude <= limit) then
+                        table.insert(renderParts, part)
+                    end
+                end
                 local rect = WorldBounds(target, camera)
                 if not rect then HideTarget(target); return end
                 local context = {
                     Player = player, Character = character, Humanoid = humanoid, RootPart = root, Pivot = pivot,
                     Camera = camera, Distance = distance, Team = team, DeltaTime = deltaTime, Data = {},
-                    Items = target.Items, Parts = target.Parts, Settings = settings, Scale = settings.TextScale or tracker.TextScale, Layer = layer, ViewportSize = camera.ViewportSize,
+                    Items = target.Items, Parts = renderParts, Settings = settings, Scale = settings.TextScale or tracker.TextScale, Layer = layer, ViewportSize = camera.ViewportSize,
                     Drawn = target.Drawn, Generation = target.Generation,
                 }
                 local dataProvider = options.DataProvider or Preview.DataProvider

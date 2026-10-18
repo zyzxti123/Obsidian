@@ -3849,6 +3849,106 @@ function Library:AddDraggableMenu(Name: string)
     return Holder, Container
 end
 
+-- Status Overlay
+function Library:AddStatusOverlay(info: any): any
+    info = info or {}
+    local holder, container = self:AddDraggableMenu(info.Title or "Status")
+    holder.AutomaticSize = Enum.AutomaticSize.None
+    holder.Size = UDim2.fromOffset(info.Width or 280, 112)
+    holder.Position = info.Position or UDim2.new(1, -292, 0, 320)
+    local label = New("TextLabel", {
+        BackgroundTransparency = 1, Text = "", TextSize = 13, RichText = true,
+        TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top, AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, -14, 0, 0), Parent = container,
+    })
+    local track = New("Frame", {
+        BorderSizePixel = 0, BackgroundColor3 = "MainColor", Size = UDim2.new(1, -14, 0, 5), Parent = container,
+    })
+    local fill = New("Frame", {
+        BorderSizePixel = 0, BackgroundColor3 = "AccentColor", Size = UDim2.fromScale(0, 1), Parent = track,
+    })
+    local icons = New("Frame", {
+        BackgroundTransparency = 1, Size = UDim2.new(1, -14, 0, 36), Visible = false, Parent = container,
+    })
+    New("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), Parent = icons })
+    label.LayoutOrder, track.LayoutOrder, icons.LayoutOrder = 1, 2, 3
+    local overlay = { Holder = holder, Container = container, Label = label, Fill = fill, Icons = {}, Destroyed = false }
+    local layout = container:FindFirstChildOfClass("UIListLayout")
+    if layout then
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        overlay.LayoutConnection = layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function(): ()
+            if not overlay.Destroyed then
+                holder.Size = UDim2.fromOffset(info.Width or 280, math.max(90, layout.AbsoluteContentSize.Y + 49))
+            end
+        end)
+    end
+
+    function overlay:SetVisible(visible: boolean): ()
+        if not self.Destroyed then
+            holder.Visible = visible
+        end
+    end
+
+    function overlay:SetData(text: string, progress: number?, color: Color3?): ()
+        if self.Destroyed then
+            return
+        end
+
+        if label.Text ~= text then
+            label.Text = text
+        end
+        track.Visible = progress ~= nil
+        fill.Size = UDim2.fromScale(math.clamp(progress or 0, 0, 1), 1)
+        if color then
+            fill.BackgroundColor3 = color
+        end
+    end
+
+    function overlay:SetIcons(images: { string }): ()
+        if self.Destroyed then
+            return
+        end
+
+        icons.Visible = #images > 0
+        for index, image in images do
+            if index > 6 then
+                break
+            end
+
+            local view = self.Icons[index]
+            if not view then
+                view = New("ImageLabel", {
+                    BackgroundColor3 = "MainColor", BorderSizePixel = 0, Size = UDim2.fromOffset(36, 36),
+                    ScaleType = Enum.ScaleType.Fit, Parent = icons,
+                })
+                self.Icons[index] = view
+            end
+            view.Image, view.Visible = image, true
+        end
+        for index = #images + 1, #self.Icons do
+            self.Icons[index].Visible = false
+        end
+    end
+
+    function overlay:Destroy(): ()
+        if self.Destroyed then
+            return
+        end
+
+        self.Destroyed = true
+        if self.LayoutConnection then
+            self.LayoutConnection:Disconnect()
+        end
+        local index = table.find(Library.DraggableElements, holder)
+        if index then
+            table.remove(Library.DraggableElements, index)
+        end
+        holder:Destroy()
+    end
+    overlay:SetVisible(info.Visible == true)
+    return overlay
+end
+
 -- Minimap Overlay
 function Library:AddMinimap(info: any): any
     setthreadidentity(8)
@@ -10706,6 +10806,11 @@ do
             end
             local selected = ({ ForceField = Enum.Material.ForceField, Plastic = Enum.Material.Plastic, Glass = Enum.Material.Glass, Neon = Enum.Material.Neon })[settings.Material]
             if selected then appearance.Material, appearance.Color = selected, fill end
+            if settings.Glow or settings.Shading == false then
+                appearance.Material, appearance.Color = Enum.Material.Neon, fill
+            end
+            appearance.Reflectance = math.clamp(settings.Reflectance or 0, 0, 1)
+            appearance.CastShadow = settings.Shading ~= false
             appearance.FillColor, appearance.FillTransparency = fill, 1 - opacity * (1 - self.ModelTransparency)
             return appearance
         end
@@ -10716,6 +10821,12 @@ do
                 if part.Color ~= appearance.Color then part.Color = appearance.Color end
                 if part.Material ~= appearance.Material then part.Material = appearance.Material end
                 if part.Transparency ~= appearance.Transparency then part.Transparency = appearance.Transparency end
+                if part.Reflectance ~= (appearance.Reflectance or 0) then
+                    part.Reflectance = appearance.Reflectance or 0
+                end
+                if part.CastShadow ~= (appearance.CastShadow == true) then
+                    part.CastShadow = appearance.CastShadow == true
+                end
             end
             self:UpdateChamsTexture(appearance.Color)
             ChamsViewport.Visible = appearance.Enabled and appearance.FillTransparency < 1
@@ -14000,6 +14111,25 @@ function Library:EscapeNotificationText(text: any): string
     return escaped
 end
 
+function Library:ResolveNotificationSegmentIcon(reference: any): string?
+    local explicit = type(reference) == "table"
+    if explicit then
+        reference = reference.Icon or reference.Image or reference.AssetId
+    end
+    if type(reference) == "number" then
+        return if reference > 0 and reference < math.huge and reference == math.floor(reference) then string.format("rbxassetid://%.0f", reference) else nil
+    end
+    if type(reference) ~= "string" then
+        return nil
+    end
+
+    local id = string.match(reference, "^rbxassetid://(%d+)$") or (if explicit then string.match(reference, "^(%d+)$") else nil)
+    if id and tonumber(id) and tonumber(id) > 0 then
+        return "rbxassetid://" .. id
+    end
+    return nil
+end
+
 function Library:GetNotificationColor(color: any): Color3
     if typeof(color) == "Color3" then return color end
     if type(color) == "string" then
@@ -14015,6 +14145,10 @@ function Library:FormatNotificationSegments(segments: { any }): string
     assert(type(segments) == "table", "Notification segments must be a table")
     local formatted = table.create(#segments)
     for _, segment in segments do
+        if Library:ResolveNotificationSegmentIcon(segment) then
+            continue
+        end
+
         local text = Library:EscapeNotificationText(if type(segment) == "table" then segment.Text or "" else segment)
         if type(segment) == "table" then
             if segment.Bold then text = "<b>" .. text .. "</b>" end
@@ -14135,6 +14269,9 @@ function Library:Notify(...: any): any
         Size = UDim2.fromScale(if data.Steps or typeof(data.Time) == "Instance" then 0 else 1, 1), Parent = timer,
     })
     data.Frame, data.Holder, data.Label, data.TimerFill = frame, holder, description, fill
+    data.InlineHolder = New("Frame", { BackgroundTransparency = 1, Visible = false, ClipsDescendants = true, Parent = holder })
+    data.InlineElements = {}
+
 
     function data:CancelTween(key: string): ()
         local tween = self.Tweens[key]
@@ -14175,6 +14312,136 @@ function Library:Notify(...: any): any
         return text
     end
 
+    function data:ClearInline(): ()
+        for _, view in self.InlineElements do
+            Library:RemoveFromRegistry(view)
+            view:Destroy()
+        end
+        table.clear(self.InlineElements)
+        self.InlineHolder.Visible = false
+    end
+
+    function data:LayoutInline(available: number, revision: number): (number?, number?)
+        local hasImages = false
+        for _, segment in self.Segments or {} do
+            if Library:ResolveNotificationSegmentIcon(segment) then
+                hasImages = true
+                break
+            end
+        end
+        if not hasImages then
+            self:ClearInline()
+            description.Visible = true
+            return nil, nil
+        end
+
+        local segments = table.clone(self.Segments)
+        if compact and self.Title then
+            table.insert(segments, 1, { Text = self.Title .. "  ", Bold = true, Color = self.TitleColor })
+        end
+        local atoms, x, y, rowHeight, width = {}, 0, 0, description.TextSize, 0
+        local function nextRow(): ()
+            width = math.max(width, x)
+            x, y, rowHeight = 0, y + rowHeight + 2, description.TextSize
+        end
+        local function place(atom: any): ()
+            if x > 0 and x + atom.Width > available then
+                nextRow()
+            end
+            atom.X, atom.Y = x, y
+            table.insert(atoms, atom)
+            x, rowHeight = x + atom.Width, math.max(rowHeight, atom.Height)
+        end
+        local function addText(text: string, segment: any): ()
+            local formatted = Library:FormatNotificationSegments({ { Text = text, Color = segment.Color, Bold = segment.Bold } })
+            local measured, height = Library:GetTextBounds(formatted, description.FontFace, description.TextSize, 1000000)
+            if measured > available then
+                for first, last in utf8.graphemes(text) do
+                    local grapheme = string.sub(text, first, last)
+                    local styled = Library:FormatNotificationSegments({ { Text = grapheme, Color = segment.Color, Bold = segment.Bold } })
+                    local characterWidth, characterHeight = Library:GetTextBounds(styled, description.FontFace, description.TextSize, 1000000)
+                    place({ Kind = "TextLabel", Text = styled, Width = math.min(available, characterWidth), Height = characterHeight })
+                end
+            else
+                if x == 0 and string.match(text, "^%s+$") then
+                    return
+                end
+                place({ Kind = "TextLabel", Text = formatted, Width = measured, Height = height })
+            end
+        end
+        for _, segment in segments do
+            local image = Library:ResolveNotificationSegmentIcon(segment)
+            if image then
+                local size = math.clamp(if type(segment) == "table" then tonumber(segment.Size) or description.TextSize else description.TextSize, 1, available)
+                place({ Kind = "ImageLabel", Image = image, Width = size, Height = size, Color = if type(segment) == "table" then segment.Color else nil })
+            else
+                local settings = if type(segment) == "table" then segment else { Text = segment }
+                local text = tostring(settings.Text or "")
+                local position = 1
+                while position <= #text do
+                    local newline = string.find(text, "\n", position, true)
+                    local line = string.sub(text, position, if newline then newline - 1 else #text)
+                    local cursor = 1
+                    while cursor <= #line do
+                        local first, last = string.find(line, "^%s+", cursor)
+                        if not first then
+                            first, last = string.find(line, "^%S+", cursor)
+                        end
+                        if not first or not last then
+                            break
+                        end
+
+                        addText(string.sub(line, first, last), settings)
+                        cursor = last + 1
+                    end
+                    if not newline then
+                        break
+                    end
+
+                    nextRow()
+                    position = newline + 1
+                end
+            end
+        end
+        if self.Destroyed or revision ~= self.LayoutRevision then
+            return 0, 0
+        end
+
+        for index, atom in atoms do
+            local view = self.InlineElements[index]
+            if view and view.ClassName ~= atom.Kind then
+                Library:RemoveFromRegistry(view)
+                view:Destroy()
+                view = nil
+            end
+            if not view then
+                view = New(atom.Kind, {
+                    BackgroundTransparency = 1, TextColor3 = if atom.Kind == "TextLabel" then "FontColor" else nil,
+                    TextSize = if atom.Kind == "TextLabel" then description.TextSize else nil,
+                    RichText = if atom.Kind == "TextLabel" then true else nil,
+                    TextXAlignment = if atom.Kind == "TextLabel" then Enum.TextXAlignment.Left else nil,
+                    ImageColor3 = if atom.Kind == "ImageLabel" then Color3.new(1, 1, 1) else nil,
+                    ScaleType = if atom.Kind == "ImageLabel" then Enum.ScaleType.Fit else nil,
+                    Parent = self.InlineHolder,
+                })
+                self.InlineElements[index] = view
+            end
+            view.Position, view.Size = UDim2.fromOffset(atom.X, atom.Y), UDim2.fromOffset(atom.Width, atom.Height)
+            if atom.Kind == "TextLabel" then
+                view.Text, view.FontFace = atom.Text, description.FontFace
+            else
+                view.Image, view.ImageColor3 = atom.Image, if atom.Color then Library:GetNotificationColor(atom.Color) else Color3.new(1, 1, 1)
+            end
+        end
+        for index = #self.InlineElements, #atoms + 1, -1 do
+            local view = table.remove(self.InlineElements, index)
+            Library:RemoveFromRegistry(view)
+            view:Destroy()
+        end
+        self.InlineHolder.Visible, description.Visible = true, false
+        return math.min(available, math.max(width, x)), y + rowHeight
+    end
+
     function data:Resize(): ()
         setthreadidentity(8)
         if self.Destroyed then return end
@@ -14186,6 +14453,10 @@ function Library:Notify(...: any): any
         local available = math.max(1, maximum - padding * 2 - iconWidth - closeWidth)
         local text = self:GetText()
         local width, height = Library:GetTextBounds(if self.RichText then text else Library:EscapeNotificationText(text), description.FontFace, description.TextSize, available)
+        local inlineWidth, inlineHeight = self:LayoutInline(available, revision)
+        if inlineWidth then
+            width, height = inlineWidth, inlineHeight
+        end
         local titleWidth, titleHeight = 0, 0
         if title then
             titleWidth, titleHeight = Library:GetTextBounds(if self.RichText then self.Title else Library:EscapeNotificationText(self.Title), title.FontFace, title.TextSize, available)
@@ -14200,6 +14471,7 @@ function Library:Notify(...: any): any
         description.Text = text
         description.Size = UDim2.fromOffset(textWidth, height)
         description.Position = UDim2.fromOffset(padding + iconWidth, vertical + (if title then titleHeight + 4 else math.max(0, (contentHeight - height) / 2)))
+        self.InlineHolder.Position, self.InlineHolder.Size = description.Position, description.Size
         if title then
             title.Text = self.Title
             title.Position = UDim2.fromOffset(padding + iconWidth, vertical)

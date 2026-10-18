@@ -3734,6 +3734,48 @@ function Library:AddDraggableButton(...)
     return DraggableButton
 end
 
+-- Wrapped Tab Buttons
+function Library:LayoutTabButtons(holder: GuiObject, entries: any, rowHeight: number): number
+    local width = math.max(math.floor(holder.AbsoluteSize.X / self.DPIScale), 1)
+    local ordered = {}
+    for _, entry in entries do
+        local button = entry.Button or entry.ButtonHolder
+        if not entry.Destroyed and button.Visible then
+            table.insert(ordered, { Button = button, Content = entry.ButtonContent, Index = #ordered + 1 })
+        end
+    end
+    table.sort(ordered, function(left: any, right: any): boolean
+        if left.Button.LayoutOrder == right.Button.LayoutOrder then
+            return left.Index < right.Index
+        end
+
+        return left.Button.LayoutOrder < right.Button.LayoutOrder
+    end)
+
+    local rows = { { Items = {}, Width = 0 } }
+    for _, item in ordered do
+        item.Width = math.min(width, math.ceil(item.Content.AbsoluteSize.X / self.DPIScale) + 24)
+        local row = rows[#rows]
+        if #row.Items > 0 and row.Width + item.Width > width then
+            row = { Items = {}, Width = 0 }
+            table.insert(rows, row)
+        end
+        table.insert(row.Items, item)
+        row.Width += item.Width
+    end
+    for index, row in rows do
+        local extra = (width - row.Width) / math.max(#row.Items, 1)
+        local x = 0
+        for itemIndex, item in row.Items do
+            local size = if itemIndex == #row.Items then width - x else math.floor(item.Width + extra)
+            item.Button.Position = UDim2.fromOffset(x, (index - 1) * rowHeight)
+            item.Button.Size = UDim2.fromOffset(size, rowHeight)
+            x += size
+        end
+    end
+    return #rows * rowHeight
+end
+
 function Library:AddDraggableMenu(Name: string)
     setthreadidentity(8)
     local Holder = New("Frame", {
@@ -3805,6 +3847,88 @@ function Library:AddDraggableMenu(Name: string)
     PositionDraggable(Holder, Holder.Position)
 
     return Holder, Container
+end
+
+-- Minimap Overlay
+function Library:AddMinimap(info: any): any
+    setthreadidentity(8)
+    info = info or {}
+    local holder, container = self:AddDraggableMenu(info.Title or "Minimap")
+    holder.AutomaticSize = Enum.AutomaticSize.None
+    local viewport = New("ImageButton", {
+        Name = "Map", BackgroundColor3 = "MainColor", BorderSizePixel = 0,
+        Image = "", AutoButtonColor = false, ClipsDescendants = true,
+        Size = UDim2.fromScale(1, 1), Parent = container,
+    })
+    local center = New("TextButton", {
+        BackgroundTransparency = 1, Text = "Center", TextSize = 13,
+        AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -7, 0, 0),
+        Size = UDim2.fromOffset(58, 34), Parent = holder,
+    })
+    local overlay = { Holder = holder, Viewport = viewport, Destroyed = false }
+
+    function overlay:SetVisible(visible: boolean): ()
+        if not self.Destroyed then
+            holder.Visible = visible
+        end
+    end
+
+    function overlay:SetSize(size: number): ()
+        if not self.Destroyed then
+            size = math.clamp(size, 160, 500)
+            holder.Size = UDim2.fromOffset(size + 14, size + 49)
+        end
+    end
+
+    function overlay:ResetPosition(): ()
+        if not self.Destroyed then
+            holder.AnchorPoint = Vector2.new(1, 0)
+            holder.Position = UDim2.new(1, -18, 0, 70)
+        end
+    end
+
+    function overlay:Center(): ()
+        if not self.Destroyed and info.OnCenter then
+            info.OnCenter()
+        end
+    end
+
+    local connection = center.Activated:Connect(function(): ()
+        overlay:Center()
+    end)
+
+    function overlay:Destroy(): ()
+        if self.Destroyed then
+            return
+        end
+
+        self.Destroyed = true
+        connection:Disconnect()
+        local index = table.find(Library.DraggableElements, holder)
+        if index then
+            table.remove(Library.DraggableElements, index)
+        end
+        for _, registry in { Library.Corners, Library.Scales } do
+            for entry = #registry, 1, -1 do
+                if registry[entry]:IsDescendantOf(holder) then
+                    table.remove(registry, entry)
+                end
+            end
+        end
+        for _, descendant in holder:GetDescendants() do
+            Library:RemoveFromRegistry(descendant)
+        end
+        Library:RemoveFromRegistry(holder)
+        holder:Destroy()
+    end
+
+    overlay:SetSize(info.Size or 260)
+    overlay:ResetPosition()
+    overlay:SetVisible(info.Visible ~= false)
+    self:OnUnload(function(): ()
+        overlay:Destroy()
+    end)
+    return overlay
 end
 
 function Library:AddDraggableImageButton(...)
@@ -16186,11 +16310,6 @@ function Library:CreateWindow(WindowInfo)
             Size = UDim2.fromScale(1, 1),
             Parent = SubTabHolder,
         })
-        New("UIListLayout", {
-            FillDirection = Enum.FillDirection.Horizontal,
-            HorizontalFlex = Enum.UIFlexAlignment.Fill,
-            Parent = SubTabButtons,
-        })
 
        --// Tab Table \\--
         local Tab = {
@@ -16383,7 +16502,7 @@ function Library:CreateWindow(WindowInfo)
 
         function Tab:RefreshSides()
             setthreadidentity(8)
-            local SubTabOffset = SubTabHolder.Visible and 38 or 0
+            local SubTabOffset = SubTabHolder.Visible and SubTabHolder.Size.Y.Offset + 4 or 0
             local WarningOffset = WarningBoxHolder.Visible and WarningBox.Size.Y.Offset + 8 or 0
             local Offset = SubTabOffset + WarningOffset
 
@@ -16451,6 +16570,7 @@ function Library:CreateWindow(WindowInfo)
             local HasVisibleSubTabs = FirstSubTab ~= nil
 
             SubTabHolder.Visible = HasVisibleSubTabs
+            SubTabHolder.Size = UDim2.new(1, -4, 0, Library:LayoutTabButtons(SubTabButtons, Tab.SubTabOrder, 34))
             Tab.RootSides[1].Visible = not HasVisibleSubTabs
             Tab.RootSides[2].Visible = not HasVisibleSubTabs
 
@@ -16470,6 +16590,10 @@ function Library:CreateWindow(WindowInfo)
             end
             Tab:RefreshSides()
         end
+
+        table.insert(Tab.Connections, SubTabButtons:GetPropertyChangedSignal("AbsoluteSize"):Connect(function(): ()
+            Tab:RefreshSubTabs()
+        end))
 
         function Tab:AddSubTab(...)
             setthreadidentity(8)
@@ -16498,6 +16622,7 @@ function Library:CreateWindow(WindowInfo)
                 BackgroundColor3 = "MainColor",
                 BackgroundTransparency = 0,
                 LayoutOrder = SubTabInfo.Order or SubTabIndex,
+                ClipsDescendants = true,
                 Size = UDim2.fromOffset(0, 34),
                 Text = "",
                 ZIndex = 3,
@@ -16622,6 +16747,7 @@ function Library:CreateWindow(WindowInfo)
                 Destroyed = false,
                 Visible = true,
                 Button = Button,
+                ButtonContent = ButtonContent,
                 ButtonCorner = ButtonCorner,
                 Canvas = Canvas,
                 Groupboxes = {},
@@ -16790,6 +16916,9 @@ function Library:CreateWindow(WindowInfo)
                 Tab:RefreshSubTabs()
             end
 
+            table.insert(SubTab.Connections, ButtonContent:GetPropertyChangedSignal("AbsoluteSize"):Connect(function(): ()
+                Tab:RefreshSubTabs()
+            end))
             table.insert(SubTab.Connections, Button.MouseEnter:Connect(function()
                 setthreadidentity(8)
                 if Tab.ActiveSubTab ~= SubTab then
@@ -16871,11 +17000,6 @@ function Library:CreateWindow(WindowInfo)
                     Size = UDim2.new(1, 0, 0, 34),
                     Parent = TabboxHolder,
                 })
-                New("UIListLayout", {
-                    FillDirection = Enum.FillDirection.Horizontal,
-                    HorizontalFlex = Enum.UIFlexAlignment.Fill,
-                    Parent = TabboxButtons,
-                })
             end
 
             local TotalTabs = 0
@@ -16913,6 +17037,20 @@ function Library:CreateWindow(WindowInfo)
                 end
             end
 
+            function Tabbox:RefreshTabs(): ()
+                if Tabbox.Destroyed then
+                    return
+                end
+
+                local height = Library:LayoutTabButtons(TabboxButtons, Tabbox.Tabs, 34)
+                TabboxButtons.Size = UDim2.new(1, 0, 0, height)
+                Tabbox:Resize()
+            end
+
+            table.insert(Tabbox.Connections, TabboxButtons:GetPropertyChangedSignal("AbsoluteSize"):Connect(function(): ()
+                Tabbox:RefreshTabs()
+            end))
+
             function Tabbox:AddTab(Name, IconName)
                 setthreadidentity(8)
                 TotalTabs = TotalTabs + 1
@@ -16930,6 +17068,8 @@ function Library:CreateWindow(WindowInfo)
                     BackgroundColor3 = "MainColor",
                     BackgroundTransparency = 0,
                     Size = UDim2.fromOffset(0, 34),
+                    LayoutOrder = TabIndex,
+                    ClipsDescendants = true,
                     Text = "",
                     Parent = TabboxButtons,
                 })
@@ -17020,6 +17160,7 @@ function Library:CreateWindow(WindowInfo)
                     Destroyed = false,
 
                     ButtonHolder = Button,
+                    ButtonContent = ButtonContent,
                     Container = Container,
                     ButtonCorner = ButtonCorner,
 
@@ -17076,12 +17217,15 @@ function Library:CreateWindow(WindowInfo)
                         return
                     end
 
+                    local headerHeight = TabboxButtons.Size.Y.Offset + 1
+                    Container.Position = UDim2.fromOffset(0, headerHeight)
+                    Container.Size = UDim2.new(1, 0, 1, -headerHeight)
                     local ContentSize = (List.AbsoluteContentSize.Y / Library.DPIScale) + 14
                     if Tabbox.PoppedOut then
-                        ContentSize = math.min(ContentSize, GetPopOutBodyMaxHeight(Tabbox, 35))
+                        ContentSize = math.min(ContentSize, GetPopOutBodyMaxHeight(Tabbox, headerHeight))
                     end
 
-                    TabboxHolder.Size = UDim2.new(1, 0, 0, ContentSize + 35)
+                    TabboxHolder.Size = UDim2.new(1, 0, 0, ContentSize + headerHeight)
                     if ParentObj.Type == "Groupbox" then
                         ParentObj:Resize()
                     end
@@ -17124,6 +17268,7 @@ function Library:CreateWindow(WindowInfo)
                     if Button then
                         Button:Destroy()
                     end
+                    Tabbox:RefreshTabs()
                 end
 
                 --// Execution \\--
@@ -17131,11 +17276,15 @@ function Library:CreateWindow(WindowInfo)
                     Tab:Show()
                 end
 
+                table.insert(Tab.Connections, ButtonContent:GetPropertyChangedSignal("AbsoluteSize"):Connect(function(): ()
+                    Tabbox:RefreshTabs()
+                end))
                 Button.MouseButton1Click:Connect(Tab.Show)
 
                 setmetatable(Tab, BaseGroupbox)
 
                 Tabbox.Tabs[TabStoringIndex] = Tab
+                Tabbox:RefreshTabs()
                 Tabbox:UpdateCorners()
 
                 return Tab, TabStoringIndex

@@ -3851,6 +3851,7 @@ end
 
 -- Status Overlay
 function Library:AddStatusOverlay(info: any): any
+    setthreadidentity(8)
     info = info or {}
     local holder, container = self:AddDraggableMenu(info.Title or "Status")
     holder.AutomaticSize = Enum.AutomaticSize.None
@@ -3877,6 +3878,7 @@ function Library:AddStatusOverlay(info: any): any
     if layout then
         layout.SortOrder = Enum.SortOrder.LayoutOrder
         overlay.LayoutConnection = layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function(): ()
+            setthreadidentity(8)
             if not overlay.Destroyed then
                 holder.Size = UDim2.fromOffset(info.Width or 280, math.max(90, layout.AbsoluteContentSize.Y + 49))
             end
@@ -3884,12 +3886,14 @@ function Library:AddStatusOverlay(info: any): any
     end
 
     function overlay:SetVisible(visible: boolean): ()
+        setthreadidentity(8)
         if not self.Destroyed then
             holder.Visible = visible
         end
     end
 
     function overlay:SetData(text: string, progress: number?, color: Color3?): ()
+        setthreadidentity(8)
         if self.Destroyed then
             return
         end
@@ -3905,6 +3909,7 @@ function Library:AddStatusOverlay(info: any): any
     end
 
     function overlay:SetIcons(images: { string }): ()
+        setthreadidentity(8)
         if self.Destroyed then
             return
         end
@@ -3931,6 +3936,7 @@ function Library:AddStatusOverlay(info: any): any
     end
 
     function overlay:Destroy(): ()
+        setthreadidentity(8)
         if self.Destroyed then
             return
         end
@@ -3968,12 +3974,14 @@ function Library:AddMinimap(info: any): any
     local overlay = { Holder = holder, Viewport = viewport, Destroyed = false }
 
     function overlay:SetVisible(visible: boolean): ()
+        setthreadidentity(8)
         if not self.Destroyed then
             holder.Visible = visible
         end
     end
 
     function overlay:SetSize(size: number): ()
+        setthreadidentity(8)
         if not self.Destroyed then
             size = math.clamp(size, 160, 500)
             holder.Size = UDim2.fromOffset(size + 14, size + 49)
@@ -3981,6 +3989,7 @@ function Library:AddMinimap(info: any): any
     end
 
     function overlay:ResetPosition(): ()
+        setthreadidentity(8)
         if not self.Destroyed then
             holder.AnchorPoint = Vector2.new(1, 0)
             holder.Position = UDim2.new(1, -18, 0, 70)
@@ -3988,16 +3997,19 @@ function Library:AddMinimap(info: any): any
     end
 
     function overlay:Center(): ()
+        setthreadidentity(8)
         if not self.Destroyed and info.OnCenter then
             info.OnCenter()
         end
     end
 
     local connection = center.Activated:Connect(function(): ()
+            setthreadidentity(8)
         overlay:Center()
     end)
 
     function overlay:Destroy(): ()
+        setthreadidentity(8)
         if self.Destroyed then
             return
         end
